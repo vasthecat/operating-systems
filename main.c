@@ -8,6 +8,8 @@
 #include <pthread.h>
 #include <semaphore.h>
 
+#define PASSWORD_SIZE 20
+
 enum brute_mode_t
 {
   M_RECURSIVE,
@@ -24,7 +26,7 @@ struct config_t
 
 struct task_t
 {
-  char password[8];
+  char password[PASSWORD_SIZE];
 };
 
 struct queue_t
@@ -33,76 +35,99 @@ struct queue_t
   int size, capacity;
   int head, tail;
   pthread_mutex_t head_mut, tail_mut;
-  sem_t empty, full;
+  sem_t count, available;
 };
+struct queue_t queue;
+bool found = false;
+char result[PASSWORD_SIZE];
 
 void
 queue_init(struct queue_t *queue)
 {
   queue->size = 0;
   queue->capacity = 8;
-  queue->head = 0;
-  queue->tail = queue->capacity - 1;
-  sem_init(&queue->full, 0, queue->capacity);
+  queue->head = queue->tail = 0;
+  sem_init(&queue->count, 0, 0);
+  sem_init(&queue->available, 0, queue->capacity);
+  pthread_mutex_init(&queue->head_mut, NULL);
+  pthread_mutex_init(&queue->tail_mut, NULL);
 }
 
 void
 queue_push(struct queue_t *queue, struct task_t *task)
 {
-  sem_wait(&queue->full);
+  sem_wait(&queue->available);
   
-  pthread_mutex_lock(&queue->head_mut);
-  queue->size++;
-  queue->tail = (queue->tail + 1) % queue->capacity;
+  pthread_mutex_lock(&queue->tail_mut);
   queue->tasks[queue->tail] = *task;
-  pthread_mutex_unlock(&queue->head_mut);
-
-  printf("Enqued '%s'\n", task->password);
+  queue->tail = (queue->tail + 1) % queue->capacity;
+  queue->size++;
+  /* printf("Enqued '%s'\n", task->password); */
+  pthread_mutex_unlock(&queue->tail_mut);
+  
+  sem_post(&queue->count);
 }
 
 void
 queue_pop(struct queue_t *queue, struct task_t *task)
 {
-  sem_post(&queue->full);
+  sem_wait(&queue->count);
 
-  pthread_mutex_lock(&queue->tail_mut);
-  queue->size--;
+  pthread_mutex_lock(&queue->head_mut);
   *task = queue->tasks[queue->head];
   queue->head = (queue->head + 1) % queue->capacity;
-  pthread_mutex_unlock(&queue->tail_mut);
+  queue->size--;
+  /* printf("Dequed '%s'\n", task->password); */
+  pthread_mutex_unlock(&queue->head_mut);
 
-  printf("Dequed '%s'\n", task->password);
+  sem_post(&queue->available);
 }
 
-bool
-check_password(char *password, char *hash)
+void *
+check_password(void *arg)
 {
-  char *hashed = crypt(password, hash);
-  return strcmp(hashed, hash) == 0;
+  char *hash = (char *) arg;
+  
+  while (true)
+  {
+    struct task_t task;
+    queue_pop(&queue, &task);
+    
+    struct crypt_data data;
+    char *hashed = crypt_r(task.password, hash, &data);
+    if (strcmp(hashed, hash) == 0)
+    {
+      printf("Password found: '%s'\n", task.password);
+      found = true;
+      strcpy(result, task.password);
+    }
+    if (found) break;
+  }
+  return NULL;
 }
 
-bool
+void
 bruteforce_rec(char *password, struct config_t *config, int pos)
 {
   if (config->length == pos)
   {
-    if (check_password(password, config->hash))
-      return true;
+    struct task_t task;
+    memset(task.password, 0, PASSWORD_SIZE);
+    strcpy(task.password, password);
+    queue_push(&queue, &task);
   }
   else
   {
     for (int i = 0; config->alphabet[i] != '\0'; ++i)
     {
       password[pos] = config->alphabet[i];
-      if (bruteforce_rec(password, config, pos + 1))
-	return true;
+      bruteforce_rec(password, config, pos + 1);
     }
   }
-  return false;
-}
+} 
 
-bool
-bruteforce_iter(char *password, struct config_t *config)
+void
+bruteforce_iter(struct config_t *config)
 {
   size_t size = strlen(config->alphabet) - 1;
   int a[config->length];
@@ -111,17 +136,18 @@ bruteforce_iter(char *password, struct config_t *config)
   while (true)
   {
     int k;
+    struct task_t task;
+    memset(task.password, 0, PASSWORD_SIZE);
+    for (k = 0; k < config->length; ++k)
+      task.password[k] = config->alphabet[a[k]];
+
+    queue_push(&queue, &task);
+    
     for (k = config->length - 1; (k >= 0) && (a[k] == size); --k)
       a[k] = 0;
     if (k < 0) break;
     a[k]++;
-    for (k = 0; k < config->length; ++k)
-      password[k] = config->alphabet[a[k]];
-
-    if (check_password(password, config->hash))
-      return true;
   }
-  return false;
 }
 
 void
@@ -159,49 +185,43 @@ int
 main(int argc, char *argv[])
 {
   struct config_t config = {
-    .alphabet = "abc",
+    .alphabet = "abcd",
     .length = 3,
     .mode = M_ITERATIVE,
     .hash = "hiN3t5mIZ/ytk", // hi + abcd
   };
   parse_opts(&config, argc, argv);
-
-  struct queue_t queue;
   queue_init(&queue);
-  struct task_t task, result;
-  task = (struct task_t) { .password = "1234567" };
-  queue_push(&queue, &task);
-  task = (struct task_t) { .password = "hello" };
-  queue_push(&queue, &task);
-  task = (struct task_t) { .password = "there" };
-  queue_push(&queue, &task);
 
-  queue_pop(&queue, &result);
-  queue_pop(&queue, &result);
-  queue_pop(&queue, &result);
+  pthread_t thread1, thread2;
 
-  /* char password[config.length + 1]; */
-  /* password[config.length] = '\0'; */
+  pthread_create(&thread1, NULL, check_password, (void *) config.hash);
+  pthread_create(&thread2, NULL, check_password, (void *) config.hash);
 
-  /* bool found = false; */
-  /* switch (config.mode) */
-  /* { */
-  /* case M_ITERATIVE: */
-  /*   found = bruteforce_iter(password, &config); */
-  /*   break; */
-  /* case M_RECURSIVE: */
-  /*   found = bruteforce_rec(password, &config, 0); */
-  /*   break; */
-  /* } */
+  bool found = false;
+  switch (config.mode)
+  {
+  case M_ITERATIVE:
+    bruteforce_iter(&config);
+    break;
+  case M_RECURSIVE:
+    char password[config.length + 1];
+    password[config.length] = '\0';
+    bruteforce_rec(password, &config, 0);
+    break;
+  }
 
-  /* if (found) */
-  /* { */
-  /*   printf("Found password: '%s'\n", password); */
-  /* } */
-  /* else */
-  /* { */
-  /*   printf("Password not found\n"); */
-  /* } */
+  pthread_join(thread1, NULL);
+  pthread_join(thread2, NULL);
+
+  if (found)
+  {
+    printf("Found password: '%s'\n", result);
+  }
+  else
+  {
+    printf("Password not found\n");
+  }
 
   return 0;
 }
