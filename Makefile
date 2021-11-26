@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-Wall -g -O2
 TARGET=brute
 OBJ=main.o
-LIBS=-lcrypt
+LIBS=-lcrypt -lpthread -lrt
 
 all: $(TARGET)
 $(TARGET): $(OBJ)

@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <crypt.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 enum brute_mode_t
 {
@@ -19,6 +21,58 @@ struct config_t
   enum brute_mode_t mode;
   char *hash;
 };
+
+struct task_t
+{
+  char password[8];
+};
+
+struct queue_t
+{
+  struct task_t tasks[8];
+  int size, capacity;
+  int head, tail;
+  pthread_mutex_t head_mut, tail_mut;
+  sem_t empty, full;
+};
+
+void
+queue_init(struct queue_t *queue)
+{
+  queue->size = 0;
+  queue->capacity = 8;
+  queue->head = 0;
+  queue->tail = queue->capacity - 1;
+  sem_init(&queue->full, 0, queue->capacity);
+}
+
+void
+queue_push(struct queue_t *queue, struct task_t *task)
+{
+  sem_wait(&queue->full);
+  
+  pthread_mutex_lock(&queue->head_mut);
+  queue->size++;
+  queue->tail = (queue->tail + 1) % queue->capacity;
+  queue->tasks[queue->tail] = *task;
+  pthread_mutex_unlock(&queue->head_mut);
+
+  printf("Enqued '%s'\n", task->password);
+}
+
+void
+queue_pop(struct queue_t *queue, struct task_t *task)
+{
+  sem_post(&queue->full);
+
+  pthread_mutex_lock(&queue->tail_mut);
+  queue->size--;
+  *task = queue->tasks[queue->head];
+  queue->head = (queue->head + 1) % queue->capacity;
+  pthread_mutex_unlock(&queue->tail_mut);
+
+  printf("Dequed '%s'\n", task->password);
+}
 
 bool
 check_password(char *password, char *hash)
@@ -112,28 +166,42 @@ main(int argc, char *argv[])
   };
   parse_opts(&config, argc, argv);
 
-  char password[config.length + 1];
-  password[config.length] = '\0';
+  struct queue_t queue;
+  queue_init(&queue);
+  struct task_t task, result;
+  task = (struct task_t) { .password = "1234567" };
+  queue_push(&queue, &task);
+  task = (struct task_t) { .password = "hello" };
+  queue_push(&queue, &task);
+  task = (struct task_t) { .password = "there" };
+  queue_push(&queue, &task);
 
-  bool found = false;
-  switch (config.mode)
-  {
-  case M_ITERATIVE:
-    found = bruteforce_iter(password, &config);
-    break;
-  case M_RECURSIVE:
-    found = bruteforce_rec(password, &config, 0);
-    break;
-  }
+  queue_pop(&queue, &result);
+  queue_pop(&queue, &result);
+  queue_pop(&queue, &result);
 
-  if (found)
-  {
-    printf("Found password: '%s'\n", password);
-  }
-  else
-  {
-    printf("Password not found\n");
-  }
+  /* char password[config.length + 1]; */
+  /* password[config.length] = '\0'; */
+
+  /* bool found = false; */
+  /* switch (config.mode) */
+  /* { */
+  /* case M_ITERATIVE: */
+  /*   found = bruteforce_iter(password, &config); */
+  /*   break; */
+  /* case M_RECURSIVE: */
+  /*   found = bruteforce_rec(password, &config, 0); */
+  /*   break; */
+  /* } */
+
+  /* if (found) */
+  /* { */
+  /*   printf("Found password: '%s'\n", password); */
+  /* } */
+  /* else */
+  /* { */
+  /*   printf("Password not found\n"); */
+  /* } */
 
   return 0;
 }
