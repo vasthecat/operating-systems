@@ -2,10 +2,11 @@ CC=gcc
 CFLAGS=-Wall -g -O2
 TARGET=brute
 OBJ=main.o
+LIBS=-lcrypt
 
 all: $(TARGET)
 $(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) $(OBJ) -o $@
+	$(CC) $(CFLAGS) $(LIBS) $(OBJ) -o $@
 
 main.o: main.c
 	$(CC) $(CFLAGS) -c $^

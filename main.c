@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <crypt.h>
 
 enum brute_mode_t
 {
@@ -16,24 +17,37 @@ struct config_t
   char *alphabet;
   int length;
   enum brute_mode_t mode;
+  char *hash;
 };
 
-void
+bool
+check_password(char *password, char *hash)
+{
+  char *hashed = crypt(password, hash);
+  return strcmp(hashed, hash) == 0;
+}
+
+bool
 bruteforce_rec(char *password, struct config_t *config, int pos)
 {
   if (config->length == pos)
-    printf("r %s\n", password);
+  {
+    if (check_password(password, config->hash))
+      return true;
+  }
   else
   {
     for (int i = 0; config->alphabet[i] != '\0'; ++i)
     {
       password[pos] = config->alphabet[i];
-      bruteforce_rec(password, config, pos + 1);
+      if (bruteforce_rec(password, config, pos + 1))
+	return true;
     }
   }
+  return false;
 }
 
-void
+bool
 bruteforce_iter(char *password, struct config_t *config)
 {
   size_t size = strlen(config->alphabet) - 1;
@@ -50,8 +64,10 @@ bruteforce_iter(char *password, struct config_t *config)
     for (k = 0; k < config->length; ++k)
       password[k] = config->alphabet[a[k]];
 
-    printf("i %s\n", password);
+    if (check_password(password, config->hash))
+      return true;
   }
+  return false;
 }
 
 void
@@ -59,7 +75,7 @@ parse_opts(struct config_t *config, int argc, char *argv[])
 {
   int opt;
   opterr = 1;
-  while ((opt = getopt(argc, argv, "ira:l:")) != -1)
+  while ((opt = getopt(argc, argv, "ira:l:h:")) != -1)
   {
     switch (opt)
     {
@@ -75,6 +91,9 @@ parse_opts(struct config_t *config, int argc, char *argv[])
     case 'l':
       config->length = atoi(optarg);
       break;
+    case 'h':
+      config->hash = optarg;
+      break;
     default:
       exit(1);
       break;
@@ -88,21 +107,32 @@ main(int argc, char *argv[])
   struct config_t config = {
     .alphabet = "abc",
     .length = 3,
-    .mode = M_ITERATIVE
+    .mode = M_ITERATIVE,
+    .hash = "hiN3t5mIZ/ytk", // hi + abcd
   };
   parse_opts(&config, argc, argv);
 
   char password[config.length + 1];
   password[config.length] = '\0';
-  
+
+  bool found = false;
   switch (config.mode)
   {
   case M_ITERATIVE:
-    bruteforce_iter(password, &config);
+    found = bruteforce_iter(password, &config);
     break;
   case M_RECURSIVE:
-    bruteforce_rec(password, &config, 0);
+    found = bruteforce_rec(password, &config, 0);
     break;
+  }
+
+  if (found)
+  {
+    printf("Found password: '%s'\n", password);
+  }
+  else
+  {
+    printf("Password not found\n");
   }
 
   return 0;
