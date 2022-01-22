@@ -4,8 +4,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <crypt.h>
 #include <pthread.h>
+#include <crypt.h>
+#include <fcntl.h> // O_* constants for named semaphores
 #include <semaphore.h>
 
 #define PASSWORD_SIZE 20
@@ -35,7 +36,7 @@ struct queue_t
   int size, capacity;
   int head, tail;
   pthread_mutex_t head_mut, tail_mut;
-  sem_t count, available;
+  sem_t *count, *available;
 };
 struct queue_t queue;
 bool found = false;
@@ -47,17 +48,38 @@ queue_init(struct queue_t *queue)
   queue->size = 0;
   queue->capacity = 8;
   queue->head = queue->tail = 0;
-  sem_init(&queue->count, 0, 0);
-  sem_init(&queue->available, 0, queue->capacity);
+
+  // MacOS doesn't support unnamed semaphores
+  if ((queue->count = sem_open("/brute-sem_count", O_CREAT, 0644, 0)) == SEM_FAILED)
+  {
+    printf("Could not initialize 'count' semaphore\n");
+    exit(EXIT_FAILURE);
+  }
+  sem_unlink("/brute-sem_count");
+  if ((queue->available = sem_open("/brute-sem_available", O_CREAT, 0644, queue->capacity)) == SEM_FAILED)
+  {
+    sem_close(queue->count);
+    printf("Could not initialize 'available' semaphore\n");
+    exit(EXIT_FAILURE);
+  }
+  sem_unlink("/brute-sem_available");
+
   pthread_mutex_init(&queue->head_mut, NULL);
   pthread_mutex_init(&queue->tail_mut, NULL);
 }
 
 void
+queue_destroy(struct queue_t *queue)
+{
+  sem_close(queue->count);
+  sem_close(queue->available);
+}
+
+void
 queue_push(struct queue_t *queue, struct task_t *task)
 {
-  sem_wait(&queue->available);
-  
+  sem_wait(queue->available);
+
   pthread_mutex_lock(&queue->tail_mut);
   queue->tasks[queue->tail] = *task;
   queue->tail = (queue->tail + 1) % queue->capacity;
@@ -65,13 +87,13 @@ queue_push(struct queue_t *queue, struct task_t *task)
   /* printf("Enqued '%s'\n", task->password); */
   pthread_mutex_unlock(&queue->tail_mut);
   
-  sem_post(&queue->count);
+  sem_post(queue->count);
 }
 
 void
 queue_pop(struct queue_t *queue, struct task_t *task)
 {
-  sem_wait(&queue->count);
+  sem_wait(queue->count);
 
   pthread_mutex_lock(&queue->head_mut);
   *task = queue->tasks[queue->head];
@@ -80,7 +102,7 @@ queue_pop(struct queue_t *queue, struct task_t *task)
   /* printf("Dequed '%s'\n", task->password); */
   pthread_mutex_unlock(&queue->head_mut);
 
-  sem_post(&queue->available);
+  sem_post(queue->available);
 }
 
 void *
@@ -193,26 +215,33 @@ main(int argc, char *argv[])
   parse_opts(&config, argc, argv);
   queue_init(&queue);
 
-  pthread_t thread1, thread2;
+  int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
 
-  pthread_create(&thread1, NULL, check_password, (void *) config.hash);
-  pthread_create(&thread2, NULL, check_password, (void *) config.hash);
+  pthread_t threads[cpu_count];
+  for (int i = 0; i < cpu_count; ++i)
+  {
+    pthread_create(&threads[i], NULL, check_password, (void *) config.hash);
+  }
 
   bool found = false;
+  char password[config.length + 1];
+  password[config.length] = '\0';
   switch (config.mode)
   {
   case M_ITERATIVE:
     bruteforce_iter(&config);
     break;
   case M_RECURSIVE:
-    char password[config.length + 1];
-    password[config.length] = '\0';
     bruteforce_rec(password, &config, 0);
     break;
   }
 
-  pthread_join(thread1, NULL);
-  pthread_join(thread2, NULL);
+  for (int i = 0; i < cpu_count; ++i)
+  {
+    pthread_join(threads[i], NULL);
+  }
+
+  queue_destroy(&queue);
 
   if (found)
   {

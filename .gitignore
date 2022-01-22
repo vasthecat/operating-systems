@@ -1,3 +1,6 @@
 *.o
 brute
 encr
+libs
+.DS_Store
+

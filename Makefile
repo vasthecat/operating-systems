@@ -1,15 +1,25 @@
 CC=gcc
-CFLAGS=-Wall -g -O2
-TARGET=brute
+CFLAGS=-Wall -g -std=c99
+LIBS=-lcrypt -lpthread
+DEPS=
+
 OBJ=main.o
-LIBS=-lcrypt -lpthread -lrt
+TARGET=brute
+
+ifeq ($(shell uname), Darwin)
+override CFLAGS+=-I./crypt-macos
+override LIBS+=-L./crypt-macos
+override DEPS+=crypt-macos/libcrypt.a
+endif
 
 all: $(TARGET)
-$(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) $(LIBS) $(OBJ) -o $@
-
-main.o: main.c
-	$(CC) $(CFLAGS) -c $^
+$(TARGET): $(OBJ) $(DEPS)
+	$(CC) $(CFLAGS) $(OBJ) $(LIBS) -o $@
 
 clean:
 	rm -f $(OBJ) $(TARGET)
+
+ifeq ($(shell uname), Darwin)
+crypt-macos/libcrypt.a:
+	$(MAKE) -C crypt-macos
+endif
