@@ -52,15 +52,15 @@ queue_init(struct queue_t *queue)
     // MacOS doesn't support unnamed semaphores
     if ((queue->count = sem_open("/brute-sem_count", O_CREAT, 0644, 0)) == SEM_FAILED)
     {
-	printf("Could not initialize 'count' semaphore\n");
-	exit(EXIT_FAILURE);
+        printf("Could not initialize 'count' semaphore\n");
+        exit(EXIT_FAILURE);
     }
     sem_unlink("/brute-sem_count");
     if ((queue->available = sem_open("/brute-sem_available", O_CREAT, 0644, queue->capacity)) == SEM_FAILED)
     {
-	sem_close(queue->count);
-	printf("Could not initialize 'available' semaphore\n");
-	exit(EXIT_FAILURE);
+        sem_close(queue->count);
+        printf("Could not initialize 'available' semaphore\n");
+        exit(EXIT_FAILURE);
     }
     sem_unlink("/brute-sem_available");
 
@@ -112,18 +112,18 @@ check_password(void *arg)
   
     while (true)
     {
-	struct task_t task;
-	queue_pop(&queue, &task);
+        struct task_t task;
+        queue_pop(&queue, &task);
 
-	struct crypt_data data;
-	char *hashed = crypt_r(task.password, hash, &data);
-	if (strcmp(hashed, hash) == 0)
-	{
-	    printf("Password found: '%s'\n", task.password);
-	    found = true;
-	    strcpy(result, task.password);
-	}
-	if (found) break;
+        struct crypt_data data;
+        char *hashed = crypt_r(task.password, hash, &data);
+        if (strcmp(hashed, hash) == 0)
+        {
+            printf("Password found: '%s'\n", task.password);
+            found = true;
+            strcpy(result, task.password);
+        }
+        if (found) break;
     }
     return NULL;
 }
@@ -133,18 +133,18 @@ bruteforce_rec(char *password, struct config_t *config, int pos)
 {
     if (config->length == pos)
     {
-	struct task_t task;
-	memset(task.password, 0, PASSWORD_SIZE);
-	strcpy(task.password, password);
-	queue_push(&queue, &task);
+        struct task_t task;
+        memset(task.password, 0, PASSWORD_SIZE);
+        strcpy(task.password, password);
+        queue_push(&queue, &task);
     }
     else
     {
-	for (int i = 0; config->alphabet[i] != '\0'; ++i)
-	{
-	    password[pos] = config->alphabet[i];
-	    bruteforce_rec(password, config, pos + 1);
-	}
+        for (int i = 0; config->alphabet[i] != '\0'; ++i)
+        {
+            password[pos] = config->alphabet[i];
+            bruteforce_rec(password, config, pos + 1);
+        }
     }
 } 
 
@@ -157,18 +157,18 @@ bruteforce_iter(struct config_t *config)
 
     while (true)
     {
-	int k;
-	struct task_t task;
-	memset(task.password, 0, PASSWORD_SIZE);
-	for (k = 0; k < config->length; ++k)
-	    task.password[k] = config->alphabet[a[k]];
+        int k;
+        struct task_t task;
+        memset(task.password, 0, PASSWORD_SIZE);
+        for (k = 0; k < config->length; ++k)
+            task.password[k] = config->alphabet[a[k]];
 
-	queue_push(&queue, &task);
+        queue_push(&queue, &task);
     
-	for (k = config->length - 1; (k >= 0) && (a[k] == size); --k)
-	    a[k] = 0;
-	if (k < 0) break;
-	a[k]++;
+        for (k = config->length - 1; (k >= 0) && (a[k] == size); --k)
+            a[k] = 0;
+        if (k < 0) break;
+        a[k]++;
     }
 }
 
@@ -179,27 +179,27 @@ parse_opts(struct config_t *config, int argc, char *argv[])
     opterr = 1;
     while ((opt = getopt(argc, argv, "ira:l:h:")) != -1)
     {
-	switch (opt)
-	{
-	case 'i':
-	    config->mode = M_ITERATIVE;
-	    break;
-	case 'r':
-	    config->mode = M_RECURSIVE;
-	    break;
-	case 'a':
-	    config->alphabet = optarg;
-	    break;
-	case 'l':
-	    config->length = atoi(optarg);
-	    break;
-	case 'h':
-	    config->hash = optarg;
-	    break;
-	default:
-	    exit(1);
-	    break;
-	}
+        switch (opt)
+        {
+        case 'i':
+            config->mode = M_ITERATIVE;
+            break;
+        case 'r':
+            config->mode = M_RECURSIVE;
+            break;
+        case 'a':
+            config->alphabet = optarg;
+            break;
+        case 'l':
+            config->length = atoi(optarg);
+            break;
+        case 'h':
+            config->hash = optarg;
+            break;
+        default:
+            exit(1);
+            break;
+        }
     }
 }
 
@@ -207,10 +207,10 @@ int
 main(int argc, char *argv[])
 {
     struct config_t config = {
-	.alphabet = "abcd",
-	.length = 3,
-	.mode = M_ITERATIVE,
-	.hash = "hiN3t5mIZ/ytk", // hi + abcd
+        .alphabet = "abcd",
+        .length = 3,
+        .mode = M_ITERATIVE,
+        .hash = "hiN3t5mIZ/ytk", // hi + abcd
     };
     parse_opts(&config, argc, argv);
     queue_init(&queue);
@@ -220,7 +220,7 @@ main(int argc, char *argv[])
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
-	pthread_create(&threads[i], NULL, check_password, (void *) config.hash);
+        pthread_create(&threads[i], NULL, check_password, (void *) config.hash);
     }
 
     bool found = false;
@@ -229,27 +229,27 @@ main(int argc, char *argv[])
     switch (config.mode)
     {
     case M_ITERATIVE:
-	bruteforce_iter(&config);
-	break;
+        bruteforce_iter(&config);
+        break;
     case M_RECURSIVE:
-	bruteforce_rec(password, &config, 0);
-	break;
+        bruteforce_rec(password, &config, 0);
+        break;
     }
 
     for (int i = 0; i < cpu_count; ++i)
     {
-	pthread_join(threads[i], NULL);
+        pthread_join(threads[i], NULL);
     }
 
     queue_destroy(&queue);
 
     if (found)
     {
-	printf("Found password: '%s'\n", result);
+        printf("Found password: '%s'\n", result);
     }
     else
     {
-	printf("Password not found\n");
+        printf("Password not found\n");
     }
 
     return 0;
