@@ -39,8 +39,9 @@ struct queue_t
     sem_t *count, *available;
 };
 struct queue_t queue;
-bool found = false;
-char result[PASSWORD_SIZE];
+volatile int tasks = 0;
+pthread_mutex_t tasks_mutex;
+pthread_cond_t tasks_cond;
 
 void
 queue_init(struct queue_t *queue)
@@ -81,10 +82,18 @@ queue_push(struct queue_t *queue, struct task_t *task)
     sem_wait(queue->available);
 
     pthread_mutex_lock(&queue->tail_mut);
+
+    pthread_mutex_lock(&tasks_mutex);
+    ++tasks;
+    pthread_mutex_unlock(&tasks_mutex);
+
+    if (queue->tail + 1 >= queue->capacity)
+        queue->tail = 0;
+    else
+        ++queue->tail;
+
     queue->tasks[queue->tail] = *task;
-    queue->tail = (queue->tail + 1) % queue->capacity;
-    queue->size++;
-    /* printf("Enqued '%s'\n", task->password); */
+    printf("Enqued '%s'\n", task->password);
     pthread_mutex_unlock(&queue->tail_mut);
   
     sem_post(queue->count);
@@ -95,11 +104,18 @@ queue_pop(struct queue_t *queue, struct task_t *task)
 {
     sem_wait(queue->count);
 
+    pthread_mutex_lock(&tasks_mutex);
+    --tasks;
+    pthread_mutex_unlock(&tasks_mutex);
+
     pthread_mutex_lock(&queue->head_mut);
+    if (queue->head + 1 >= queue->capacity)
+        queue->head = 0;
+    else
+        ++queue->head;
+
     *task = queue->tasks[queue->head];
-    queue->head = (queue->head + 1) % queue->capacity;
-    queue->size--;
-    /* printf("Dequed '%s'\n", task->password); */
+    printf("Dequed '%s'\n", task->password);
     pthread_mutex_unlock(&queue->head_mut);
 
     sem_post(queue->available);
@@ -120,10 +136,9 @@ check_password(void *arg)
         if (strcmp(hashed, hash) == 0)
         {
             printf("Password found: '%s'\n", task.password);
-            found = true;
-            strcpy(result, task.password);
         }
-        if (found) break;
+        if (tasks == 0)
+            pthread_cond_signal(&tasks_cond);
     }
     return NULL;
 }
@@ -215,15 +230,17 @@ main(int argc, char *argv[])
     parse_opts(&config, argc, argv);
     queue_init(&queue);
 
-    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    pthread_mutex_init(&tasks_mutex, NULL);
+    pthread_cond_init(&tasks_cond, NULL);
 
+
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
         pthread_create(&threads[i], NULL, check_password, (void *) config.hash);
     }
 
-    bool found = false;
     char password[config.length + 1];
     password[config.length] = '\0';
     switch (config.mode)
@@ -236,21 +253,18 @@ main(int argc, char *argv[])
         break;
     }
 
+    pthread_mutex_lock(&tasks_mutex);
+    while (tasks != 0)
+        pthread_cond_wait(&tasks_cond, &tasks_mutex);
+    pthread_mutex_unlock(&tasks_mutex);
+
     for (int i = 0; i < cpu_count; ++i)
     {
+        pthread_cancel(threads[i]);
         pthread_join(threads[i], NULL);
     }
 
     queue_destroy(&queue);
-
-    if (found)
-    {
-        printf("Found password: '%s'\n", result);
-    }
-    else
-    {
-        printf("Password not found\n");
-    }
 
     return 0;
 }
