@@ -17,11 +17,18 @@ enum brute_mode_t
     M_ITERATIVE
 };
 
+enum run_mode_t
+{
+    M_SINGLE,
+    M_MULTI,
+};
+
 struct config_t
 {
     char *alphabet;
     int length;
-    enum brute_mode_t mode;
+    enum brute_mode_t brute_mode;
+    enum run_mode_t run_mode;
     char *hash;
 };
 
@@ -38,6 +45,7 @@ struct queue_t
     pthread_mutex_t head_mut, tail_mut;
     sem_t *count, *available;
 };
+
 struct queue_t queue;
 volatile int tasks = 0;
 pthread_mutex_t tasks_mutex;
@@ -93,7 +101,7 @@ queue_push(struct queue_t *queue, struct task_t *task)
         ++queue->tail;
 
     queue->tasks[queue->tail] = *task;
-    printf("Enqued '%s'\n", task->password);
+    /* printf("Enqued '%s'\n", task->password); */
     pthread_mutex_unlock(&queue->tail_mut);
   
     sem_post(queue->count);
@@ -115,14 +123,14 @@ queue_pop(struct queue_t *queue, struct task_t *task)
         ++queue->head;
 
     *task = queue->tasks[queue->head];
-    printf("Dequed '%s'\n", task->password);
+    /* printf("Dequed '%s'\n", task->password); */
     pthread_mutex_unlock(&queue->head_mut);
 
     sem_post(queue->available);
 }
 
 void *
-check_password(void *arg)
+check_password_multi(void *arg)
 {
     char *hash = (char *) arg;
   
@@ -143,6 +151,19 @@ check_password(void *arg)
     return NULL;
 }
 
+bool
+check_password_single(struct task_t task, char *hash)
+{
+    struct crypt_data data;
+    char *hashed = crypt_r(task.password, hash, &data);
+    if (strcmp(hashed, hash) == 0)
+    {
+        printf("Password found: '%s'\n", task.password);
+        return true;
+    }
+    return false;
+}
+
 void
 bruteforce_rec(char *password, struct config_t *config, int pos)
 {
@@ -151,7 +172,16 @@ bruteforce_rec(char *password, struct config_t *config, int pos)
         struct task_t task;
         memset(task.password, 0, PASSWORD_SIZE);
         strcpy(task.password, password);
-        queue_push(&queue, &task);
+        switch (config->run_mode)
+        {
+        case M_SINGLE:
+            if (check_password_single(task, config->hash))
+                return;
+            break;
+        case M_MULTI:
+            queue_push(&queue, &task);
+            break;
+        }
     }
     else
     {
@@ -178,7 +208,16 @@ bruteforce_iter(struct config_t *config)
         for (k = 0; k < config->length; ++k)
             task.password[k] = config->alphabet[a[k]];
 
-        queue_push(&queue, &task);
+        switch (config->run_mode)
+        {
+        case M_SINGLE:
+            if (check_password_single(task, config->hash))
+                return;
+            break;
+        case M_MULTI:
+            queue_push(&queue, &task);
+            break;
+        }
     
         for (k = config->length - 1; (k >= 0) && (a[k] == size); --k)
             a[k] = 0;
@@ -188,62 +227,39 @@ bruteforce_iter(struct config_t *config)
 }
 
 void
-parse_opts(struct config_t *config, int argc, char *argv[])
+singlethreaded(struct config_t config)
 {
-    int opt;
-    opterr = 1;
-    while ((opt = getopt(argc, argv, "ira:l:h:")) != -1)
+    char password[config.length + 1];
+    password[config.length] = '\0';
+    switch (config.brute_mode)
     {
-        switch (opt)
-        {
-        case 'i':
-            config->mode = M_ITERATIVE;
-            break;
-        case 'r':
-            config->mode = M_RECURSIVE;
-            break;
-        case 'a':
-            config->alphabet = optarg;
-            break;
-        case 'l':
-            config->length = atoi(optarg);
-            break;
-        case 'h':
-            config->hash = optarg;
-            break;
-        default:
-            exit(1);
-            break;
-        }
+    case M_ITERATIVE:
+        bruteforce_iter(&config);
+        break;
+    case M_RECURSIVE:
+        bruteforce_rec(password, &config, 0);
+        break;
     }
 }
 
-int
-main(int argc, char *argv[])
+void
+multithreaded(struct config_t config)
 {
-    struct config_t config = {
-        .alphabet = "abcd",
-        .length = 3,
-        .mode = M_ITERATIVE,
-        .hash = "hiN3t5mIZ/ytk", // hi + abcd
-    };
-    parse_opts(&config, argc, argv);
     queue_init(&queue);
 
     pthread_mutex_init(&tasks_mutex, NULL);
     pthread_cond_init(&tasks_cond, NULL);
 
-
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
-        pthread_create(&threads[i], NULL, check_password, (void *) config.hash);
+        pthread_create(&threads[i], NULL, check_password_multi, (void *) config.hash);
     }
 
     char password[config.length + 1];
     password[config.length] = '\0';
-    switch (config.mode)
+    switch (config.brute_mode)
     {
     case M_ITERATIVE:
         bruteforce_iter(&config);
@@ -265,6 +281,67 @@ main(int argc, char *argv[])
     }
 
     queue_destroy(&queue);
+}
+
+void
+parse_opts(struct config_t *config, int argc, char *argv[])
+{
+    int opt;
+    opterr = 1;
+    while ((opt = getopt(argc, argv, "irmsa:l:h:")) != -1)
+    {
+        switch (opt)
+        {
+        case 'i':
+            config->brute_mode = M_ITERATIVE;
+            break;
+        case 'r':
+            config->brute_mode = M_RECURSIVE;
+            break;
+        case 'a':
+            config->alphabet = optarg;
+            break;
+        case 'l':
+            config->length = atoi(optarg);
+            break;
+        case 'h':
+            config->hash = optarg;
+            break;
+        case 's':
+            config->run_mode = M_SINGLE;
+            break;
+        case 'm':
+            config->run_mode = M_MULTI;
+            break;
+        default:
+            exit(1);
+            break;
+        }
+    }
+}
+
+int
+main(int argc, char *argv[])
+{
+    struct config_t config = {
+        .alphabet = "abc",
+        .length = 3,
+        .brute_mode = M_ITERATIVE,
+        .run_mode = M_SINGLE,
+        .hash = "hiwMxUWeODzGE", // hi + ccc
+    };
+    parse_opts(&config, argc, argv);
+
+
+    switch (config.run_mode)
+    {
+    case M_SINGLE:
+        singlethreaded(config);
+        break;
+    case M_MULTI:
+        multithreaded(config);
+        break;
+    }
 
     return 0;
 }
