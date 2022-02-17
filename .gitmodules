@@ -1,0 +1,3 @@
+[submodule "crypt-macos"]
+	path = crypt-macos
+	url = https://github.com/vasthecat/crypt-macos.git
