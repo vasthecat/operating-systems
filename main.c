@@ -44,12 +44,18 @@ struct queue_t
     int head, tail;
     pthread_mutex_t head_mut, tail_mut;
     sem_t *count, *available;
+    volatile int tasks_running;
+    pthread_mutex_t tasks_mutex;
+    pthread_cond_t tasks_cond;
 };
 
-struct queue_t queue;
-volatile int tasks = 0;
-pthread_mutex_t tasks_mutex;
-pthread_cond_t tasks_cond;
+struct context_t
+{
+    struct queue_t queue;
+    char *hash;
+};
+
+typedef bool (*password_handler_t)(struct context_t *, struct task_t *);
 
 void
 queue_init(struct queue_t *queue)
@@ -75,6 +81,10 @@ queue_init(struct queue_t *queue)
 
     pthread_mutex_init(&queue->head_mut, NULL);
     pthread_mutex_init(&queue->tail_mut, NULL);
+
+    queue->tasks_running = 0;
+    pthread_mutex_init(&queue->tasks_mutex, NULL);
+    pthread_cond_init(&queue->tasks_cond, NULL);
 }
 
 void
@@ -82,6 +92,9 @@ queue_destroy(struct queue_t *queue)
 {
     sem_close(queue->count);
     sem_close(queue->available);
+
+    pthread_mutex_destroy(&queue->tasks_mutex);
+    pthread_cond_destroy(&queue->tasks_cond);
 }
 
 void
@@ -91,9 +104,9 @@ queue_push(struct queue_t *queue, struct task_t *task)
 
     pthread_mutex_lock(&queue->tail_mut);
 
-    pthread_mutex_lock(&tasks_mutex);
-    ++tasks;
-    pthread_mutex_unlock(&tasks_mutex);
+    pthread_mutex_lock(&queue->tasks_mutex);
+    ++queue->tasks_running;
+    pthread_mutex_unlock(&queue->tasks_mutex);
 
     if (queue->tail + 1 >= queue->capacity)
         queue->tail = 0;
@@ -112,10 +125,6 @@ queue_pop(struct queue_t *queue, struct task_t *task)
 {
     sem_wait(queue->count);
 
-    pthread_mutex_lock(&tasks_mutex);
-    --tasks;
-    pthread_mutex_unlock(&tasks_mutex);
-
     pthread_mutex_lock(&queue->head_mut);
     if (queue->head + 1 >= queue->capacity)
         queue->head = 0;
@@ -132,21 +141,27 @@ queue_pop(struct queue_t *queue, struct task_t *task)
 void *
 check_password_multi(void *arg)
 {
-    char *hash = (char *) arg;
+    struct context_t *context = (struct context_t *) arg;
   
+    struct crypt_data data;
     while (true)
     {
         struct task_t task;
-        queue_pop(&queue, &task);
+        queue_pop(&context->queue, &task);
 
-        struct crypt_data data;
-        char *hashed = crypt_r(task.password, hash, &data);
-        if (strcmp(hashed, hash) == 0)
+        data.initialized = 0;
+        char *hashed = crypt_r(task.password, context->hash, &data);
+        if (strcmp(hashed, context->hash) == 0)
         {
             printf("Password found: '%s'\n", task.password);
         }
-        if (tasks == 0)
-            pthread_cond_signal(&tasks_cond);
+
+        pthread_mutex_lock(&context->queue.tasks_mutex);
+        --context->queue.tasks_running;
+        pthread_mutex_unlock(&context->queue.tasks_mutex);
+
+        if (context->queue.tasks_running == 0)
+            pthread_cond_signal(&context->queue.tasks_cond);
     }
     return NULL;
 }
@@ -155,6 +170,7 @@ bool
 check_password_single(struct task_t task, char *hash)
 {
     struct crypt_data data;
+    data.initialized = 0; // ???
     char *hashed = crypt_r(task.password, hash, &data);
     if (strcmp(hashed, hash) == 0)
     {
@@ -164,37 +180,44 @@ check_password_single(struct task_t task, char *hash)
     return false;
 }
 
+bool
+mt_password_handler(struct context_t *context, struct task_t *task)
+{
+    queue_push(&context->queue, task);
+    return false;
+}
+
+bool
+st_password_handler(struct context_t *context, struct task_t *task)
+{
+    return check_password_single(*task, context->hash);
+}
+
 void
-bruteforce_rec(char *password, struct config_t *config, int pos)
+bruteforce_rec(char *password, struct config_t *config, int pos, 
+               struct context_t *context,
+               password_handler_t handler)
 {
     if (config->length == pos)
     {
         struct task_t task;
-        memset(task.password, 0, PASSWORD_SIZE);
         strcpy(task.password, password);
-        switch (config->run_mode)
-        {
-        case M_SINGLE:
-            if (check_password_single(task, config->hash))
-                return;
-            break;
-        case M_MULTI:
-            queue_push(&queue, &task);
-            break;
-        }
+        if (handler(context, &task)) return;
     }
     else
     {
         for (int i = 0; config->alphabet[i] != '\0'; ++i)
         {
             password[pos] = config->alphabet[i];
-            bruteforce_rec(password, config, pos + 1);
+            bruteforce_rec(password, config, pos + 1, context, handler);
         }
     }
 } 
 
 void
-bruteforce_iter(struct config_t *config)
+bruteforce_iter(struct config_t *config,
+                struct context_t *context,
+                password_handler_t handler)
 {
     size_t size = strlen(config->alphabet) - 1;
     int a[config->length];
@@ -208,16 +231,7 @@ bruteforce_iter(struct config_t *config)
         for (k = 0; k < config->length; ++k)
             task.password[k] = config->alphabet[a[k]];
 
-        switch (config->run_mode)
-        {
-        case M_SINGLE:
-            if (check_password_single(task, config->hash))
-                return;
-            break;
-        case M_MULTI:
-            queue_push(&queue, &task);
-            break;
-        }
+        if (handler(context, &task)) return;
     
         for (k = config->length - 1; (k >= 0) && (a[k] == size); --k)
             a[k] = 0;
@@ -229,15 +243,18 @@ bruteforce_iter(struct config_t *config)
 void
 singlethreaded(struct config_t config)
 {
+    struct context_t context;
+    context.hash = config.hash;
+
     char password[config.length + 1];
     password[config.length] = '\0';
     switch (config.brute_mode)
     {
     case M_ITERATIVE:
-        bruteforce_iter(&config);
+        bruteforce_iter(&config, &context, st_password_handler);
         break;
     case M_RECURSIVE:
-        bruteforce_rec(password, &config, 0);
+        bruteforce_rec(password, &config, 0, &context, mt_password_handler);
         break;
     }
 }
@@ -245,10 +262,9 @@ singlethreaded(struct config_t config)
 void
 multithreaded(struct config_t config)
 {
-    queue_init(&queue);
-
-    pthread_mutex_init(&tasks_mutex, NULL);
-    pthread_cond_init(&tasks_cond, NULL);
+    struct context_t context;
+    context.hash = config.hash;
+    queue_init(&context.queue);
 
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     pthread_t threads[cpu_count];
@@ -262,17 +278,17 @@ multithreaded(struct config_t config)
     switch (config.brute_mode)
     {
     case M_ITERATIVE:
-        bruteforce_iter(&config);
+        bruteforce_iter(&config, &context, st_password_handler);
         break;
     case M_RECURSIVE:
-        bruteforce_rec(password, &config, 0);
+        bruteforce_rec(password, &config, 0, &context, mt_password_handler);
         break;
     }
 
-    pthread_mutex_lock(&tasks_mutex);
-    while (tasks != 0)
-        pthread_cond_wait(&tasks_cond, &tasks_mutex);
-    pthread_mutex_unlock(&tasks_mutex);
+    pthread_mutex_lock(&context.queue.tasks_mutex);
+    while (context.queue.tasks_running != 0)
+        pthread_cond_wait(&context.queue.tasks_cond, &context.queue.tasks_mutex);
+    pthread_mutex_unlock(&context.queue.tasks_mutex);
 
     for (int i = 0; i < cpu_count; ++i)
     {
@@ -280,7 +296,7 @@ multithreaded(struct config_t config)
         pthread_join(threads[i], NULL);
     }
 
-    queue_destroy(&queue);
+    queue_destroy(&context.queue);
 }
 
 void
@@ -331,7 +347,6 @@ main(int argc, char *argv[])
         .hash = "hiwMxUWeODzGE", // hi + ccc
     };
     parse_opts(&config, argc, argv);
-
 
     switch (config.run_mode)
     {
