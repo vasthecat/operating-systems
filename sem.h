@@ -6,7 +6,6 @@ typedef struct
     pthread_cond_t sem_cond;
     pthread_mutex_t value_mutex;
     int value;
-    int value_max;
 } sem_t;
 
 
@@ -16,7 +15,6 @@ sem_init(sem_t *sem, int pshared, int value)
     pthread_mutex_init(&sem->value_mutex, NULL);
     pthread_cond_init(&sem->sem_cond, NULL);
     sem->value = value;
-    sem->value_max = value;
 }
 
 void

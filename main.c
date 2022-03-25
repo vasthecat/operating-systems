@@ -55,6 +55,7 @@ struct queue_t
 struct context_t
 {
     struct queue_t queue;
+    char *password;
     char *hash;
 };
 
@@ -232,54 +233,49 @@ bruteforce_iter(struct config_t *config,
 }
 
 void
-singlethreaded(struct config_t config)
+singlethreaded(struct context_t *context, struct config_t *config)
 {
-    struct context_t context;
-    context.hash = config.hash;
-
-    char password[config.length + 1];
-    password[config.length] = '\0';
-    switch (config.brute_mode)
+    char password[config->length + 1];
+    password[config->length] = '\0';
+    switch (config->brute_mode)
     {
     case M_ITERATIVE:
-        bruteforce_iter(&config, &context, st_password_handler);
+        bruteforce_iter(config, context, st_password_handler);
         break;
     case M_RECURSIVE:
-        bruteforce_rec(password, &config, 0, &context, mt_password_handler);
+        bruteforce_rec(password, config, 0, context, st_password_handler);
         break;
     }
 }
 
 void
-multithreaded(struct config_t config)
+multithreaded(struct context_t *context, struct config_t *config)
 {
-    struct context_t context;
-    context.hash = config.hash;
-    queue_init(&context.queue);
+    queue_init(&context->queue);
 
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
-        pthread_create(&threads[i], NULL, check_password_multi, (void *) config.hash);
+        pthread_create(&threads[i], NULL, check_password_multi, (void *) context);
     }
 
-    char password[config.length + 1];
-    password[config.length] = '\0';
-    switch (config.brute_mode)
+    char password[config->length + 1];
+    password[config->length] = '\0';
+    switch (config->brute_mode)
     {
     case M_ITERATIVE:
-        bruteforce_iter(&config, &context, st_password_handler);
+        bruteforce_iter(config, context, mt_password_handler);
         break;
     case M_RECURSIVE:
-        bruteforce_rec(password, &config, 0, &context, mt_password_handler);
+        bruteforce_rec(password, config, 0, context, mt_password_handler);
         break;
     }
 
-    pthread_mutex_lock(&context.queue.tasks_mutex);
-    while (context.queue.tasks_running != 0)
-        pthread_cond_wait(&context.queue.tasks_cond, &context.queue.tasks_mutex);
-    pthread_mutex_unlock(&context.queue.tasks_mutex);
+    pthread_mutex_lock(&context->queue.tasks_mutex);
+    while (context->queue.tasks_running != 0)
+        pthread_cond_wait(&context->queue.tasks_cond, &context->queue.tasks_mutex);
+    pthread_mutex_unlock(&context->queue.tasks_mutex);
 
     for (int i = 0; i < cpu_count; ++i)
     {
@@ -287,7 +283,7 @@ multithreaded(struct config_t config)
         pthread_join(threads[i], NULL);
     }
 
-    queue_destroy(&context.queue);
+    queue_destroy(&context->queue);
 }
 
 void
@@ -339,13 +335,17 @@ main(int argc, char *argv[])
     };
     parse_opts(&config, argc, argv);
 
+    struct context_t context;
+    context.hash = config.hash;
+    context.password = NULL;
+
     switch (config.run_mode)
     {
     case M_SINGLE:
-        singlethreaded(config);
+        singlethreaded(&context, &config);
         break;
     case M_MULTI:
-        multithreaded(config);
+        multithreaded(&context, &config);
         break;
     }
 
