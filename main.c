@@ -6,8 +6,11 @@
 #include <getopt.h>
 #include <pthread.h>
 #include <crypt.h>
-#include <fcntl.h> // O_* constants for named semaphores
+#ifdef __APPLE__
+#include "sem.h"
+#else
 #include <semaphore.h>
+#endif
 
 #define PASSWORD_SIZE 20
 
@@ -43,7 +46,7 @@ struct queue_t
     int size, capacity;
     int head, tail;
     pthread_mutex_t head_mut, tail_mut;
-    sem_t *count, *available;
+    sem_t count, available;
     volatile int tasks_running;
     pthread_mutex_t tasks_mutex;
     pthread_cond_t tasks_cond;
@@ -64,20 +67,8 @@ queue_init(struct queue_t *queue)
     queue->capacity = 8;
     queue->head = queue->tail = 0;
 
-    // MacOS doesn't support unnamed semaphores
-    if ((queue->count = sem_open("/brute-sem_count", O_CREAT, 0644, 0)) == SEM_FAILED)
-    {
-        printf("Could not initialize 'count' semaphore\n");
-        exit(EXIT_FAILURE);
-    }
-    sem_unlink("/brute-sem_count");
-    if ((queue->available = sem_open("/brute-sem_available", O_CREAT, 0644, queue->capacity)) == SEM_FAILED)
-    {
-        sem_close(queue->count);
-        printf("Could not initialize 'available' semaphore\n");
-        exit(EXIT_FAILURE);
-    }
-    sem_unlink("/brute-sem_available");
+    sem_init(&queue->count, 0, 0);
+    sem_init(&queue->available, 0, queue->capacity);
 
     pthread_mutex_init(&queue->head_mut, NULL);
     pthread_mutex_init(&queue->tail_mut, NULL);
@@ -90,8 +81,8 @@ queue_init(struct queue_t *queue)
 void
 queue_destroy(struct queue_t *queue)
 {
-    sem_close(queue->count);
-    sem_close(queue->available);
+    sem_close(&queue->count);
+    sem_close(&queue->available);
 
     pthread_mutex_destroy(&queue->tasks_mutex);
     pthread_cond_destroy(&queue->tasks_cond);
@@ -100,7 +91,7 @@ queue_destroy(struct queue_t *queue)
 void
 queue_push(struct queue_t *queue, struct task_t *task)
 {
-    sem_wait(queue->available);
+    sem_wait(&queue->available);
 
     pthread_mutex_lock(&queue->tail_mut);
 
@@ -117,13 +108,13 @@ queue_push(struct queue_t *queue, struct task_t *task)
     /* printf("Enqued '%s'\n", task->password); */
     pthread_mutex_unlock(&queue->tail_mut);
   
-    sem_post(queue->count);
+    sem_post(&queue->count);
 }
 
 void
 queue_pop(struct queue_t *queue, struct task_t *task)
 {
-    sem_wait(queue->count);
+    sem_wait(&queue->count);
 
     pthread_mutex_lock(&queue->head_mut);
     if (queue->head + 1 >= queue->capacity)
@@ -135,7 +126,7 @@ queue_pop(struct queue_t *queue, struct task_t *task)
     /* printf("Dequed '%s'\n", task->password); */
     pthread_mutex_unlock(&queue->head_mut);
 
-    sem_post(queue->available);
+    sem_post(&queue->available);
 }
 
 void *
