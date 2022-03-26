@@ -122,6 +122,7 @@ struct mt_context_t
     struct queue_t queue;
     password_t password;
     char *hash;
+    bool found;
 };
 
 typedef bool (*password_handler_t)(void *, struct task_t *);
@@ -191,7 +192,6 @@ st_password_handler(void *context, struct task_t *task)
     return check_password_single(task, ctx->hash);
 }
 
-
 bool
 singlethreaded(struct task_t *task, struct config_t *config)
 {
@@ -216,7 +216,7 @@ void *
 mt_worker(void *arg)
 {
     struct mt_context_t *context = (struct mt_context_t *) arg;
-  
+
     struct crypt_data data;
     while (true)
     {
@@ -227,7 +227,8 @@ mt_worker(void *arg)
         char *hashed = crypt_r(task.password, context->hash, &data);
         if (strcmp(hashed, context->hash) == 0)
         {
-            printf("Password found: '%s'\n", task.password);
+            memcpy(context->password, task.password, sizeof(task.password));
+            context->found = true;
         }
 
         pthread_mutex_lock(&context->tasks_mutex);
@@ -241,7 +242,6 @@ mt_worker(void *arg)
     return NULL;
 }
 
-
 bool
 mt_password_handler(void *context, struct task_t *task)
 {
@@ -252,7 +252,7 @@ mt_password_handler(void *context, struct task_t *task)
     pthread_mutex_unlock(&ctx->tasks_mutex);
 
     queue_push(&ctx->queue, task);
-    return false;
+    return (ctx->password[0] != 0);
 }
 
 bool
@@ -263,6 +263,7 @@ multithreaded(struct task_t *task, struct config_t *config)
     context.tasks_running = 0;
     pthread_mutex_init(&context.tasks_mutex, NULL);
     pthread_cond_init(&context.tasks_cond, NULL);
+    context.password[0] = 0;
 
     queue_init(&context.queue);
 
@@ -300,7 +301,7 @@ multithreaded(struct task_t *task, struct config_t *config)
     pthread_mutex_destroy(&context.tasks_mutex);
     pthread_cond_destroy(&context.tasks_cond);
 
-    return found;
+    return context.found;
 }
 
 void
