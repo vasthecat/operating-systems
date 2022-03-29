@@ -169,21 +169,21 @@ bruteforce_iter(struct task_t *task,
                 void *context,
                 password_handler_t handler)
 {
-    size_t size = task->to - task->from;
+    size_t size = strlen(config->alphabet) - 1;
     int a[config->length];
     memset(a, 0, config->length * sizeof(int));
 
     while (true)
     {
         int k;
-        for (k = 0; k < config->length; ++k)
+        for (k = task->from; k <= task->to; ++k)
             task->password[k] = config->alphabet[a[k]];
 
         if (handler(context, task)) return true;
     
         for (k = task->to; (k >= task->from) && (a[k] == size); --k)
             a[k] = 0;
-        if (k < 0) break;
+        if (k < task->from) break;
         a[k]++;
     }
     return false;
@@ -206,7 +206,7 @@ singlethreaded(struct task_t *task, struct config_t *config)
     context.config = config;
 
     task->from = 0;
-    task->to = strlen(config->alphabet) - 1;
+    task->to = config->length - 1;
 
     bool found = false;
     switch (config->brute_mode)
@@ -238,7 +238,7 @@ mt_worker(void *arg)
         queue_pop(&context->queue, &task);
 
         task.from = task.to;
-        task.to = strlen(config->alphabet) - 1;
+        task.to = config->length - 1;
 
         bool found = false;
         switch (config->brute_mode)
@@ -247,7 +247,7 @@ mt_worker(void *arg)
             found = bruteforce_iter(&task, config, &st_context, st_password_handler);
             break;
         case M_RECURSIVE:
-            found =bruteforce_rec(&task, config, &st_context, st_password_handler);
+            found = bruteforce_rec(&task, config, &st_context, st_password_handler);
             break;
         }
 
@@ -301,7 +301,7 @@ multithreaded(struct task_t *task, struct config_t *config)
     }
 
     task->from = 0;
-    task->to = strlen(config->alphabet) - 1 - 2;
+    task->to = config->length - 1 - 2;
 
     switch (config->brute_mode)
     {
