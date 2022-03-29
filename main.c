@@ -18,6 +18,7 @@ typedef char password_t[PASSWORD_SIZE];
 struct task_t
 {
     password_t password;
+    int from, to;
 };
 
 struct queue_t
@@ -111,6 +112,7 @@ struct st_context_t
 {
     char *hash;
     struct crypt_data cd;
+    struct config_t *config;
 };
 
 struct mt_context_t
@@ -123,18 +125,20 @@ struct mt_context_t
     password_t password;
     char *hash;
     bool found;
+
+    struct config_t *config;
 };
 
 typedef bool (*password_handler_t)(void *, struct task_t *);
 
 bool
-bruteforce_rec(struct task_t *task,
-               struct config_t *config,
-               int pos,
-               void *context,
-               password_handler_t handler)
+bruteforce_rec_internal(struct task_t *task,
+                        struct config_t *config,
+                        void *context,
+                        password_handler_t handler,
+                        int pos)
 {
-    if (config->length == pos)
+    if (pos == task->to + 1)
     {
         if (handler(context, task)) return true;
     }
@@ -143,7 +147,7 @@ bruteforce_rec(struct task_t *task,
         for (int i = 0; config->alphabet[i] != '\0'; ++i)
         {
             task->password[pos] = config->alphabet[i];
-            if (bruteforce_rec(task, config, pos + 1, context, handler))
+            if (bruteforce_rec_internal(task, config, context, handler, pos + 1))
                 return true;
         }
     }
@@ -151,12 +155,21 @@ bruteforce_rec(struct task_t *task,
 } 
 
 bool
+bruteforce_rec(struct task_t *task,
+               struct config_t *config,
+               void *context,
+               password_handler_t handler)
+{
+    return bruteforce_rec_internal(task, config, context, handler, task->from);
+}
+
+bool
 bruteforce_iter(struct task_t *task,
                 struct config_t *config,
                 void *context,
                 password_handler_t handler)
 {
-    size_t size = strlen(config->alphabet) - 1;
+    size_t size = task->to - task->from;
     int a[config->length];
     memset(a, 0, config->length * sizeof(int));
 
@@ -168,7 +181,7 @@ bruteforce_iter(struct task_t *task,
 
         if (handler(context, task)) return true;
     
-        for (k = config->length - 1; (k >= 0) && (a[k] == size); --k)
+        for (k = task->to; (k >= task->from) && (a[k] == size); --k)
             a[k] = 0;
         if (k < 0) break;
         a[k]++;
@@ -190,15 +203,19 @@ singlethreaded(struct task_t *task, struct config_t *config)
     struct st_context_t context;
     context.hash = config->hash;
     context.cd.initialized = 0;
-    bool found = false;
+    context.config = config;
 
+    task->from = 0;
+    task->to = strlen(config->alphabet) - 1;
+
+    bool found = false;
     switch (config->brute_mode)
     {
     case M_ITERATIVE:
         found = bruteforce_iter(task, config, &context, st_password_handler);
         break;
     case M_RECURSIVE:
-        found = bruteforce_rec(task, config, 0, &context, st_password_handler);
+        found = bruteforce_rec(task, config, &context, st_password_handler);
         break;
     }
 
@@ -209,16 +226,32 @@ void *
 mt_worker(void *arg)
 {
     struct mt_context_t *context = (struct mt_context_t *) arg;
+    struct config_t *config = context->config;
 
-    struct crypt_data data;
-    data.initialized = 0;
+    struct st_context_t st_context;
+    st_context.hash = context->hash;
+    st_context.cd.initialized = 0;
+
     while (true)
     {
         struct task_t task;
         queue_pop(&context->queue, &task);
 
-        char *hashed = crypt_r(task.password, context->hash, &data);
-        if (strcmp(hashed, context->hash) == 0)
+        task.from = task.to;
+        task.to = strlen(config->alphabet) - 1;
+
+        bool found = false;
+        switch (config->brute_mode)
+        {
+        case M_ITERATIVE:
+            found = bruteforce_iter(&task, config, &st_context, st_password_handler);
+            break;
+        case M_RECURSIVE:
+            found =bruteforce_rec(&task, config, &st_context, st_password_handler);
+            break;
+        }
+
+        if (found)
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
@@ -256,6 +289,7 @@ multithreaded(struct task_t *task, struct config_t *config)
     pthread_mutex_init(&context.tasks_mutex, NULL);
     pthread_cond_init(&context.tasks_cond, NULL);
     context.password[0] = 0;
+    context.config = config;
 
     queue_init(&context.queue);
 
@@ -266,13 +300,16 @@ multithreaded(struct task_t *task, struct config_t *config)
         pthread_create(&threads[i], NULL, mt_worker, (void *) &context);
     }
 
+    task->from = 0;
+    task->to = strlen(config->alphabet) - 1 - 2;
+
     switch (config->brute_mode)
     {
     case M_ITERATIVE:
         bruteforce_iter(task, config, &context, mt_password_handler);
         break;
     case M_RECURSIVE:
-        bruteforce_rec(task, config, 0, &context, mt_password_handler);
+        bruteforce_rec(task, config, &context, mt_password_handler);
         break;
     }
 
