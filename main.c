@@ -177,19 +177,11 @@ bruteforce_iter(struct task_t *task,
 }
 
 bool
-check_password_single(struct task_t *task, char *hash)
-{
-    struct crypt_data data;
-    data.initialized = 0; // ???
-    char *hashed = crypt_r(task->password, hash, &data);
-    return (strcmp(hashed, hash) == 0);
-}
-
-bool
 st_password_handler(void *context, struct task_t *task)
 {
     struct st_context_t *ctx = (struct st_context_t *) context;
-    return check_password_single(task, ctx->hash);
+    char *hashed = crypt_r(task->password, ctx->hash, &ctx->cd);
+    return (strcmp(hashed, ctx->hash) == 0);
 }
 
 bool
@@ -197,6 +189,7 @@ singlethreaded(struct task_t *task, struct config_t *config)
 {
     struct st_context_t context;
     context.hash = config->hash;
+    context.cd.initialized = 0;
     bool found = false;
 
     switch (config->brute_mode)
@@ -218,12 +211,12 @@ mt_worker(void *arg)
     struct mt_context_t *context = (struct mt_context_t *) arg;
 
     struct crypt_data data;
+    data.initialized = 0;
     while (true)
     {
         struct task_t task;
         queue_pop(&context->queue, &task);
 
-        data.initialized = 0;
         char *hashed = crypt_r(task.password, context->hash, &data);
         if (strcmp(hashed, context->hash) == 0)
         {
