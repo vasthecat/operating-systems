@@ -235,7 +235,6 @@ mt_worker(void *arg)
         --context->tasks_running;
         pthread_mutex_unlock(&context->tasks_mutex);
 
-        /* printf("%i\n", context->tasks_running); */
         if (context->tasks_running == 0)
             pthread_cond_signal(&context->tasks_cond);
     }
@@ -274,14 +273,13 @@ multithreaded(struct task_t *task, struct config_t *config)
         pthread_create(&threads[i], NULL, mt_worker, (void *) &context);
     }
 
-    bool found = false;
     switch (config->brute_mode)
     {
     case M_ITERATIVE:
-        found = bruteforce_iter(task, config, &context, mt_password_handler);
+        bruteforce_iter(task, config, &context, mt_password_handler);
         break;
     case M_RECURSIVE:
-        found = bruteforce_rec(task, config, 0, &context, mt_password_handler);
+        bruteforce_rec(task, config, 0, &context, mt_password_handler);
         break;
     }
 
@@ -292,10 +290,11 @@ multithreaded(struct task_t *task, struct config_t *config)
 
     for (int i = 0; i < cpu_count; ++i)
     {
-        printf("Cancelling: %i/%i\n", i + 1, cpu_count);
         pthread_cancel(threads[i]);
         pthread_join(threads[i], NULL);
     }
+
+    memcpy(task->password, context.password, sizeof(context.password));
 
     queue_destroy(&context.queue);
     pthread_mutex_destroy(&context.tasks_mutex);
