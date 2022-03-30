@@ -175,7 +175,7 @@ bruteforce_iter(struct task_t *task,
     while (true)
     {
         int k;
-        for (k = task->from; k <= task->to; ++k)
+        for (k = task->from; k < task->to; ++k)
             task->password[k] = config->alphabet[a[k]];
 
         if (handler(context, task)) return true;
