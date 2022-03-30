@@ -137,7 +137,7 @@ bruteforce_rec_internal(struct task_t *task,
                         password_handler_t handler,
                         int pos)
 {
-    if (pos == task->to + 1)
+    if (pos == task->to)
     {
         if (handler(context, task)) return true;
     }
@@ -180,7 +180,7 @@ bruteforce_iter(struct task_t *task,
 
         if (handler(context, task)) return true;
     
-        for (k = task->to; (k >= task->from) && (a[k] == size); --k)
+        for (k = task->to - 1; (k >= task->from) && (a[k] == size); --k)
             a[k] = 0;
         if (k < task->from) break;
         a[k]++;
@@ -204,7 +204,7 @@ singlethreaded(struct task_t *task, struct config_t *config)
     context.cd.initialized = 0;
 
     task->from = 0;
-    task->to = config->length - 1;
+    task->to = config->length;
 
     bool found = false;
     switch (config->brute_mode)
@@ -235,8 +235,8 @@ mt_worker(void *arg)
         struct task_t task;
         queue_pop(&context->queue, &task);
 
-        task.from = task.to;
-        task.to = config->length - 1;
+        task.to = task.from;
+        task.from = 0;
 
         bool found = false;
         switch (config->brute_mode)
@@ -298,8 +298,8 @@ multithreaded(struct task_t *task, struct config_t *config)
         pthread_create(&threads[i], NULL, mt_worker, (void *) &context);
     }
 
-    task->from = 0;
-    task->to = config->length - 1 - 2;
+    task->from = 2;
+    task->to = config->length;
 
     switch (config->brute_mode)
     {
