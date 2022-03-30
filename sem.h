@@ -19,20 +19,13 @@ sem_init(sem_t *sem, int pshared, int value)
 }
 
 void
-exit_func(void *arg)
-{
-    sem_t *sem = (sem_t *) arg;
-    pthread_mutex_unlock(&sem->value_mutex);
-}
-
-void
 sem_wait(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
-    pthread_cleanup_push(&exit_func, (void *) sem);
+    pthread_cleanup_push ((void (*) (void*))pthread_mutex_unlock, &sem->value_mutex);
     while (sem->value == 0)
         pthread_cond_wait(&sem->sem_cond, &sem->value_mutex);
-    pthread_cleanup_pop(1);
+    pthread_cleanup_pop(!0);
     --sem->value;
     pthread_mutex_unlock(&sem->value_mutex);
 }

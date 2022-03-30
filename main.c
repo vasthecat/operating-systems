@@ -112,7 +112,6 @@ struct st_context_t
 {
     char *hash;
     struct crypt_data cd;
-    struct config_t *config;
 };
 
 struct mt_context_t
@@ -203,7 +202,6 @@ singlethreaded(struct task_t *task, struct config_t *config)
     struct st_context_t context;
     context.hash = config->hash;
     context.cd.initialized = 0;
-    context.config = config;
 
     task->from = 0;
     task->to = config->length - 1;
