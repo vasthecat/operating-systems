@@ -169,7 +169,7 @@ bruteforce_iter(struct task_t *task,
                 password_handler_t handler)
 {
     size_t size = strlen(config->alphabet) - 1;
-    int a[config->length];
+    int a[task->to];
     memset(a, 0, config->length * sizeof(int));
 
     while (true)
