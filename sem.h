@@ -1,13 +1,14 @@
 #ifndef SEM_H
 #define SEM_H
 
+#include <pthread.h>
+
 typedef struct
 {
     pthread_cond_t sem_cond;
     pthread_mutex_t value_mutex;
     int value;
 } sem_t;
-
 
 void
 sem_init(sem_t *sem, int pshared, int value)
@@ -21,8 +22,10 @@ void
 sem_wait(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
+    pthread_cleanup_push ((void (*) (void*))pthread_mutex_unlock, &sem->value_mutex);
     while (sem->value == 0)
         pthread_cond_wait(&sem->sem_cond, &sem->value_mutex);
+    pthread_cleanup_pop(!0);
     --sem->value;
     pthread_mutex_unlock(&sem->value_mutex);
 }
@@ -34,7 +37,6 @@ sem_post(sem_t *sem)
     ++sem->value;
     pthread_cond_signal(&sem->sem_cond);
     pthread_mutex_unlock(&sem->value_mutex);
-
 }
 
 void
