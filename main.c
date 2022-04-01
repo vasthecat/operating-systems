@@ -396,7 +396,21 @@ gn_worker(void *arg)
         bool has_next = iter_next(&context->iter_state);
         pthread_mutex_unlock(&context->mutex);
 
-        bool found = process_task(&task, config, &st_context);
+        /* bool found = process_task(&task, config, &st_context); */
+        task.to = task.from;
+        task.from = 0;
+
+        bool found;
+        switch (config->brute_mode)
+        {
+        case M_ITERATIVE:
+            found = bruteforce_iter(&task, config, context, st_password_handler);
+            break;
+        case M_RECURSIVE:
+            found = bruteforce_rec(&task, config, context, st_password_handler);
+            break;
+        }
+
         if (found)
         {
             memcpy(context->password, task.password, sizeof(task.password));
@@ -422,7 +436,8 @@ generator(struct task_t *task, struct config_t *config)
     context.password[0] = 0;
     context.config = config;
 
-    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
+    cpu_count = 1;
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
