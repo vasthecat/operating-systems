@@ -128,6 +128,13 @@ struct mt_context_t
     struct config_t *config;
 };
 
+struct iter_state_t
+{
+    int idx[PASSWORD_SIZE];
+    char *alphabet;
+    size_t alph_size;
+};
+
 typedef bool (*password_handler_t)(void *, struct task_t *);
 
 bool
@@ -162,28 +169,47 @@ bruteforce_rec(struct task_t *task,
     return bruteforce_rec_internal(task, config, context, handler, task->from);
 }
 
+void
+iter_init(struct iter_state_t *state, struct task_t *task, char *alphabet)
+{
+    state->alphabet = alphabet;
+    state->alph_size = strlen(alphabet) - 1;
+
+    for (int i = task->from; i < task->to; ++i)
+    {
+        state->idx[i] = 0;
+        task->password[i] = alphabet[0];
+    }
+}
+
+bool
+iter_next(struct iter_state_t *state, struct task_t *task)
+{
+    int k;
+    for (k = task->to - 1; (k >= task->from) && (state->idx[k] == state->alph_size); --k)
+    {
+        state->idx[k] = 0;
+        task->password[k] = state->alphabet[state->idx[k]];
+    }
+    if (k < task->from) return false;
+    task->password[k] = state->alphabet[++state->idx[k]];
+    return true;
+}
+
 bool
 bruteforce_iter(struct task_t *task,
                 struct config_t *config,
                 void *context,
                 password_handler_t handler)
 {
-    size_t size = strlen(config->alphabet) - 1;
-    int a[task->to];
-    memset(a + task->from, 0, (task->to - task->from) * sizeof(int));
-
+    struct iter_state_t state;
+    iter_init(&state, task, config->alphabet);
     while (true)
     {
-        int k;
-        for (k = task->from; k < task->to; ++k)
-            task->password[k] = config->alphabet[a[k]];
-
-        if (handler(context, task)) return true;
-    
-        for (k = task->to - 1; (k >= task->from) && (a[k] == size); --k)
-            a[k] = 0;
-        if (k < task->from) break;
-        a[k]++;
+        if (handler(context, task))
+            return true;
+        if (!iter_next(&state, task))
+            break;
     }
     return false;
 }
