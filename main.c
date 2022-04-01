@@ -34,7 +34,7 @@ void
 queue_init(struct queue_t *queue)
 {
     queue->size = 0;
-    queue->capacity = sizeof(queue->tasks) / sizeof(struct task_t);
+    queue->capacity = sizeof(queue->tasks) / sizeof(queue->tasks[0]);
     queue->head = queue->tail = 0;
 
     sem_init(&queue->count, 0, 0);
@@ -139,7 +139,7 @@ bruteforce_rec_internal(struct task_t *task,
 {
     if (pos == task->to)
     {
-        if (handler(context, task)) return true;
+        return handler(context, task);
     }
     else
     {
@@ -170,7 +170,7 @@ bruteforce_iter(struct task_t *task,
 {
     size_t size = strlen(config->alphabet) - 1;
     int a[task->to];
-    memset(a, 0, config->length * sizeof(int));
+    memset(a + task->from, 0, (task->to - task->from) * sizeof(int));
 
     while (true)
     {
