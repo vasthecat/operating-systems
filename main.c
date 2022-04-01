@@ -269,15 +269,17 @@ process_task(struct task_t *task, struct config_t *config, struct st_context_t *
     task->to = task->from;
     task->from = 0;
 
+    bool found = false;
     switch (config->brute_mode)
     {
     case M_ITERATIVE:
-        return bruteforce_iter(task, config, context, st_password_handler);
+        found = bruteforce_iter(task, config, context, st_password_handler);
         break;
     case M_RECURSIVE:
-        return bruteforce_rec(task, config, context, st_password_handler);
+        found = bruteforce_rec(task, config, context, st_password_handler);
         break;
     }
+    return found;
 }
 
 void *
@@ -437,7 +439,6 @@ generator(struct task_t *task, struct config_t *config)
     context.config = config;
 
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
-    cpu_count = 1;
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
