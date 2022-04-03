@@ -426,9 +426,9 @@ generator(struct task_t *task, struct config_t *config)
     context.password[0] = 0;
     context.config = config;
 
-    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
     pthread_t threads[cpu_count];
-    for (int i = 1; i < cpu_count; ++i)
+    for (int i = 0; i < cpu_count; ++i)
     {
         pthread_create(&threads[i], NULL, gn_worker, (void *) &context);
     }
