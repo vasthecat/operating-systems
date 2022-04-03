@@ -144,6 +144,7 @@ struct gn_context_t
     password_t password;
     char *hash;
     bool found;
+    bool done;
 
     struct config_t *config;
 };
@@ -266,9 +267,6 @@ singlethreaded(struct task_t *task, struct config_t *config)
 bool
 process_task(struct task_t *task, struct config_t *config, struct st_context_t *context)
 {
-    task->to = task->from;
-    task->from = 0;
-
     bool found = false;
     switch (config->brute_mode)
     {
@@ -297,8 +295,9 @@ mt_worker(void *arg)
         struct task_t task;
         queue_pop(&context->queue, &task);
 
-        bool found = process_task(&task, config, &st_context);
-        if (found)
+        task.to = task.from;
+        task.from = 0;
+        if (process_task(&task, config, &st_context))
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
@@ -390,22 +389,25 @@ gn_worker(void *arg)
     st_context.hash = context->hash;
     st_context.cd.initialized = 0;
 
-    while (true)
+    while (!context->done)
     {
         struct task_t task;
         pthread_mutex_lock(&context->mutex);
         task = *context->iter_state.task;
-        bool has_next = iter_next(&context->iter_state);
+        if (!iter_next(&context->iter_state))
+            context->done = true;
         pthread_mutex_unlock(&context->mutex);
 
-        bool found = process_task(&task, config, &st_context);
-        if (found)
+        task.to = task.from;
+        task.from = 0;
+        if (process_task(&task, config, &st_context))
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
+            context->done = true;
         }
 
-        if (!has_next || context->found) break;
+        if (context->found) break;
     }
     return NULL;
 }
@@ -424,9 +426,9 @@ generator(struct task_t *task, struct config_t *config)
     context.password[0] = 0;
     context.config = config;
 
-    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     pthread_t threads[cpu_count];
-    for (int i = 0; i < cpu_count; ++i)
+    for (int i = 1; i < cpu_count; ++i)
     {
         pthread_create(&threads[i], NULL, gn_worker, (void *) &context);
     }
