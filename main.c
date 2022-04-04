@@ -132,7 +132,7 @@ struct mt_context_t
     struct queue_t queue;
     password_t password;
     char *hash;
-    bool found;
+    volatile bool found;
 
     struct config_t *config;
 };
@@ -143,12 +143,11 @@ struct gn_context_t
     pthread_mutex_t mutex;
     password_t password;
     char *hash;
-    bool found;
-    bool done;
+    volatile bool found;
+    volatile bool done;
 
     struct config_t *config;
 };
-
 
 typedef bool (*password_handler_t)(void *, struct task_t *);
 
@@ -241,30 +240,6 @@ st_password_handler(void *context, struct task_t *task)
 }
 
 bool
-singlethreaded(struct task_t *task, struct config_t *config)
-{
-    struct st_context_t context;
-    context.hash = config->hash;
-    context.cd.initialized = 0;
-
-    task->from = 0;
-    task->to = config->length;
-
-    bool found = false;
-    switch (config->brute_mode)
-    {
-    case M_ITERATIVE:
-        found = bruteforce_iter(task, config, &context, st_password_handler);
-        break;
-    case M_RECURSIVE:
-        found = bruteforce_rec(task, config, &context, st_password_handler);
-        break;
-    }
-
-    return found;
-}
-
-bool
 process_task(struct task_t *task, struct config_t *config, struct st_context_t *context)
 {
     bool found = false;
@@ -277,6 +252,20 @@ process_task(struct task_t *task, struct config_t *config, struct st_context_t *
         found = bruteforce_rec(task, config, context, st_password_handler);
         break;
     }
+    return found;
+}
+
+bool
+singlethreaded(struct task_t *task, struct config_t *config)
+{
+    struct st_context_t context;
+    context.hash = config->hash;
+    context.cd.initialized = 0;
+
+    task->from = 0;
+    task->to = config->length;
+
+    bool found = process_task(task, config, &context);
     return found;
 }
 
@@ -389,7 +378,7 @@ gn_worker(void *arg)
     st_context.hash = context->hash;
     st_context.cd.initialized = 0;
 
-    while (!context->done)
+    while (!context->done && !context->found)
     {
         struct task_t task;
         pthread_mutex_lock(&context->mutex);
@@ -406,8 +395,6 @@ gn_worker(void *arg)
             context->found = true;
             context->done = true;
         }
-
-        if (context->found) break;
     }
     return NULL;
 }
@@ -425,6 +412,8 @@ generator(struct task_t *task, struct config_t *config)
     pthread_mutex_init(&context.mutex, NULL);
     context.password[0] = 0;
     context.config = config;
+    context.done = false;
+    context.found = false;
 
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
     pthread_t threads[cpu_count];
