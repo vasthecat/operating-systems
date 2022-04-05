@@ -383,9 +383,14 @@ gn_worker(void *arg)
         struct task_t task;
         pthread_mutex_lock(&context->mutex);
         task = *context->iter_state.task;
-        if (!iter_next(&context->iter_state))
-            context->done = true;
+        bool done = context->done;
+        if (!done)
+        {
+            context->done = !iter_next(&context->iter_state);
+        }
         pthread_mutex_unlock(&context->mutex);
+
+        if (done) break;
 
         task.to = task.from;
         task.from = 0;
