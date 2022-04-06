@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <pthread.h>
+#include <alloca.h>
 #include <crypt.h>
 #define _XOPEN_SOURCE
 #include <ucontext.h>
@@ -152,10 +153,6 @@ struct mt_context_t
 
 struct gn_context_t
 {
-    union {
-        struct iter_state_t iter_state;
-        struct rec_state_t rec_state;
-    };
     pthread_mutex_t mutex;
     password_t password;
     char *hash;
@@ -163,6 +160,11 @@ struct gn_context_t
     volatile bool done;
 
     struct config_t *config;
+
+    union {
+        struct iter_state_t iter_state[0];
+        struct rec_state_t rec_state[0];
+    };
 };
 
 typedef bool (*password_handler_t)(void *, struct task_t *);
@@ -236,7 +238,6 @@ rec_init(struct rec_state_t *state, struct task_t *task, struct config_t *config
 bool
 rec_next(struct rec_state_t *state)
 {
-    /* printf("HELLO\n"); */
     swapcontext(&state->main, &state->worker);
     return !state->done;
 }
@@ -468,13 +469,13 @@ gn_worker(void *arg)
             switch (config->brute_mode)
             {
             case M_ITERATIVE:
-                task = *context->iter_state.task;
-                context->done = !iter_next(&context->iter_state);
+                task = *context->iter_state->task;
+                context->done = !iter_next(context->iter_state);
                 break;
             case M_RECURSIVE:
             case M_REC_ITERATOR:
-                task = *context->rec_state.task;
-                context->done = !rec_next(&context->rec_state);
+                task = *context->rec_state->task;
+                context->done = !rec_next(context->rec_state);
                 break;
             }
         }
@@ -497,45 +498,49 @@ gn_worker(void *arg)
 bool
 generator(struct task_t *task, struct config_t *config)
 {
-    struct gn_context_t context;
-    context.hash = config->hash;
+    struct gn_context_t *context = NULL;
 
     task->from = 2;
     task->to = config->length;
     switch (config->brute_mode)
     {
     case M_ITERATIVE:
-        iter_init(&context.iter_state, task, config->alphabet);
+        context = alloca(sizeof(struct gn_context_t)
+                         + sizeof(struct iter_state_t));
+        iter_init(context->iter_state, task, config->alphabet);
         break;
     case M_RECURSIVE:
     case M_REC_ITERATOR:
-        rec_init(&context.rec_state, task, config);
+        context = alloca(sizeof(struct gn_context_t)
+                         + sizeof(struct rec_state_t));
+        rec_init(context->rec_state, task, config);
         break;
     }
 
-    pthread_mutex_init(&context.mutex, NULL);
-    context.password[0] = 0;
-    context.config = config;
-    context.done = false;
-    context.found = false;
+    context->hash = config->hash;
+    pthread_mutex_init(&context->mutex, NULL);
+    context->password[0] = 0;
+    context->config = config;
+    context->done = false;
+    context->found = false;
 
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
     pthread_t threads[cpu_count];
     for (int i = 0; i < cpu_count; ++i)
     {
-        pthread_create(&threads[i], NULL, gn_worker, (void *) &context);
+        pthread_create(&threads[i], NULL, gn_worker, (void *) context);
     }
 
-    gn_worker(&context);
+    gn_worker(context);
 
     for (int i = 0; i < cpu_count; ++i)
     {
         pthread_join(threads[i], NULL);
     }
 
-    memcpy(task->password, context.password, sizeof(context.password));
+    memcpy(task->password, context->password, sizeof(context->password));
 
-    return context.found;
+    return context->found;
 }
 
 void
