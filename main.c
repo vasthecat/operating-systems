@@ -560,6 +560,10 @@ parse_opts(struct config_t *config, int argc, char *argv[])
             break;
         case 'y':
             config->brute_mode = M_REC_ITERATOR;
+#ifdef __APPLE__
+            printf("Recursive iterator mode is not supported on this platform\n");
+            exit(EXIT_FAILURE);
+#endif
             break;
         case 'a':
             config->alphabet = optarg;
