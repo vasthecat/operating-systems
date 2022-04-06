@@ -6,6 +6,8 @@
 #include <getopt.h>
 #include <pthread.h>
 #include <crypt.h>
+#define _XOPEN_SOURCE
+#include <ucontext.h>
 #ifdef __APPLE__
 #include "sem.h"
 #else
@@ -90,7 +92,8 @@ queue_pop(struct queue_t *queue, struct task_t *task)
 enum brute_mode_t
 {
     M_RECURSIVE,
-    M_ITERATIVE
+    M_ITERATIVE,
+    M_REC_ITERATOR,
 };
 
 enum run_mode_t
@@ -117,6 +120,16 @@ struct iter_state_t
     struct task_t *task;
 };
 
+// MINSIGSTKSZ is not available (???)
+#define STACK_SIZE 131000
+struct rec_state_t
+{
+    ucontext_t main, worker;
+    char stack[STACK_SIZE];
+    bool done;
+    struct task_t *task;
+};
+
 struct st_context_t
 {
     char *hash;
@@ -139,7 +152,10 @@ struct mt_context_t
 
 struct gn_context_t
 {
-    struct iter_state_t iter_state;
+    union {
+        struct iter_state_t iter_state;
+        struct rec_state_t rec_state;
+    };
     pthread_mutex_t mutex;
     password_t password;
     char *hash;
@@ -181,6 +197,66 @@ bruteforce_rec(struct task_t *task,
                password_handler_t handler)
 {
     return bruteforce_rec_internal(task, config, context, handler, task->from);
+}
+
+bool
+cooperative_handler(void *context, struct task_t *task)
+{
+    struct rec_state_t *state = (struct rec_state_t *) context;
+    swapcontext(&state->worker, &state->main);
+    return false;
+}
+
+void
+bruteforce_rec_cooperative(struct config_t *config,
+                           void *context,
+                           password_handler_t handler)
+{
+    struct rec_state_t *state = (struct rec_state_t *) context;
+    state->done = false;
+    bruteforce_rec(state->task, config, context, cooperative_handler);
+    state->done = true;
+}
+
+void
+rec_init(struct rec_state_t *state, struct task_t *task, struct config_t *config)
+{
+    state->task = task;
+    getcontext(&state->main);
+    state->worker = state->main;
+    state->worker.uc_stack.ss_sp = state->stack;
+    state->worker.uc_stack.ss_size = sizeof(state->stack);
+    state->worker.uc_link = &state->main;
+    makecontext(&state->worker,
+                (void (*) (void)) bruteforce_rec_cooperative,
+                3, config, (void *) state, cooperative_handler);
+    swapcontext(&state->main, &state->worker);
+}
+
+bool
+rec_next(struct rec_state_t *state)
+{
+    /* printf("HELLO\n"); */
+    swapcontext(&state->main, &state->worker);
+    return !state->done;
+}
+
+bool
+bruteforce_rec_iter(struct task_t *task,
+                    struct config_t *config,
+                    void *context,
+                    password_handler_t handler)
+{
+    struct rec_state_t state;
+    rec_init(&state, task, config);
+    while (true)
+    {
+        if (handler(context, task))
+            return true;
+        if (!rec_next(&state))
+            break;
+    }
+    return false;
 }
 
 void
@@ -250,6 +326,9 @@ process_task(struct task_t *task, struct config_t *config, struct st_context_t *
         break;
     case M_RECURSIVE:
         found = bruteforce_rec(task, config, context, st_password_handler);
+        break;
+    case M_REC_ITERATOR:
+        found = bruteforce_rec_iter(task, config, context, st_password_handler);
         break;
     }
     return found;
@@ -344,6 +423,7 @@ multithreaded(struct task_t *task, struct config_t *config)
         bruteforce_iter(task, config, &context, mt_password_handler);
         break;
     case M_RECURSIVE:
+    case M_REC_ITERATOR:
         bruteforce_rec(task, config, &context, mt_password_handler);
         break;
     }
@@ -378,19 +458,29 @@ gn_worker(void *arg)
     st_context.hash = context->hash;
     st_context.cd.initialized = 0;
 
-    while (!context->done && !context->found)
+    while (true)
     {
         struct task_t task;
         pthread_mutex_lock(&context->mutex);
-        task = *context->iter_state.task;
         bool done = context->done;
         if (!done)
         {
-            context->done = !iter_next(&context->iter_state);
+            switch (config->brute_mode)
+            {
+            case M_ITERATIVE:
+                task = *context->iter_state.task;
+                context->done = !iter_next(&context->iter_state);
+                break;
+            case M_RECURSIVE:
+            case M_REC_ITERATOR:
+                task = *context->rec_state.task;
+                context->done = !rec_next(&context->rec_state);
+                break;
+            }
         }
         pthread_mutex_unlock(&context->mutex);
 
-        if (done) break;
+        if (done || context->found) break;
 
         task.to = task.from;
         task.from = 0;
@@ -412,7 +502,16 @@ generator(struct task_t *task, struct config_t *config)
 
     task->from = 2;
     task->to = config->length;
-    iter_init(&context.iter_state, task, config->alphabet);
+    switch (config->brute_mode)
+    {
+    case M_ITERATIVE:
+        iter_init(&context.iter_state, task, config->alphabet);
+        break;
+    case M_RECURSIVE:
+    case M_REC_ITERATOR:
+        rec_init(&context.rec_state, task, config);
+        break;
+    }
 
     pthread_mutex_init(&context.mutex, NULL);
     context.password[0] = 0;
@@ -444,7 +543,7 @@ parse_opts(struct config_t *config, int argc, char *argv[])
 {
     int opt;
     opterr = 1;
-    while ((opt = getopt(argc, argv, "irmsga:l:h:")) != -1)
+    while ((opt = getopt(argc, argv, "irymsga:l:h:")) != -1)
     {
         switch (opt)
         {
@@ -453,6 +552,9 @@ parse_opts(struct config_t *config, int argc, char *argv[])
             break;
         case 'r':
             config->brute_mode = M_RECURSIVE;
+            break;
+        case 'y':
+            config->brute_mode = M_REC_ITERATOR;
             break;
         case 'a':
             config->alphabet = optarg;
