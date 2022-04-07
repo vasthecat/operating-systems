@@ -44,12 +44,10 @@ cooperative_handler(void *context, struct task_t *task)
 
 static void
 bruteforce_rec_cooperative(struct config_t *config,
-                           void *context,
-                           password_handler_t handler)
+                           struct rec_state_t *state)
 {
-    struct rec_state_t *state = (struct rec_state_t *) context;
     state->done = false;
-    bruteforce_rec(state->task, config, context, cooperative_handler);
+    bruteforce_rec(state->task, config, state, cooperative_handler);
     state->done = true;
 }
 

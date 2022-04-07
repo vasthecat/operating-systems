@@ -34,7 +34,6 @@ queue_push(struct queue_t *queue, struct task_t *task)
         queue->tail = 0;
 
     queue->tasks[queue->tail] = *task;
-    /* printf("Enqued '%s'\n", task->password); */
     pthread_mutex_unlock(&queue->tail_mut);
   
     sem_post(&queue->count);
@@ -51,7 +50,6 @@ queue_pop(struct queue_t *queue, struct task_t *task)
         queue->head = 0;
 
     *task = queue->tasks[queue->head];
-    /* printf("dequed '%s'\n", task->password); */
     pthread_mutex_unlock(&queue->head_mut);
 
     sem_post(&queue->available);

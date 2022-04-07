@@ -1,6 +1,8 @@
 #ifndef QUEUE_H
 #define QUEUE_H
 
+#include "common.h"
+
 #ifdef __APPLE__
 #include "sem.h"
 #else
@@ -8,7 +10,6 @@
 #endif
 
 #include <pthread.h>
-#include "common.h"
 
 struct queue_t
 {

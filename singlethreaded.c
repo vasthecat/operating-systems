@@ -24,8 +24,7 @@ singlethreaded(struct task_t *task, struct config_t *config)
     task->from = 0;
     task->to = config->length;
 
-    bool found = process_task(task, config, &context, st_password_handler);
-    return found;
+    return process_task(task, config, &context, st_password_handler);
 }
 
 bool
