@@ -24,24 +24,27 @@ singlethreaded(struct task_t *task, struct config_t *config)
     task->from = 0;
     task->to = config->length;
 
-    bool found = process_task(task, config, &context);
+    bool found = process_task(task, config, &context, st_password_handler);
     return found;
 }
 
 bool
-process_task(struct task_t *task, struct config_t *config, struct st_context_t *context)
+process_task(struct task_t *task,
+             struct config_t *config,
+             void *context,
+             password_handler_t handler)
 {
     bool found = false;
     switch (config->brute_mode)
     {
     case M_ITERATIVE:
-        found = bruteforce_iter(task, config, context, st_password_handler);
+        found = bruteforce_iter(task, config, context, handler);
         break;
     case M_RECURSIVE:
-        found = bruteforce_rec(task, config, context, st_password_handler);
+        found = bruteforce_rec(task, config, context, handler);
         break;
     case M_REC_ITERATOR:
-        found = bruteforce_rec_iter(task, config, context, st_password_handler);
+        found = bruteforce_rec_iter(task, config, context, handler);
         break;
     }
     return found;

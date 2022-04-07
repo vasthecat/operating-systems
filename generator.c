@@ -62,7 +62,7 @@ gn_worker(void *arg)
 
         task.to = task.from;
         task.from = 0;
-        if (process_task(&task, config, &st_context))
+        if (process_task(&task, config, &st_context, st_password_handler))
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;

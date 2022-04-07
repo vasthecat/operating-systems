@@ -40,7 +40,7 @@ mt_worker(void *arg)
 
         task.to = task.from;
         task.from = 0;
-        if (process_task(&task, config, &st_context))
+        if (process_task(&task, config, &st_context, st_password_handler))
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
@@ -92,16 +92,7 @@ multithreaded(struct task_t *task, struct config_t *config)
     task->from = 2;
     task->to = config->length;
 
-    switch (config->brute_mode)
-    {
-    case M_ITERATIVE:
-        bruteforce_iter(task, config, &context, mt_password_handler);
-        break;
-    case M_RECURSIVE:
-    case M_REC_ITERATOR:
-        bruteforce_rec(task, config, &context, mt_password_handler);
-        break;
-    }
+    process_task(task, config, &context, mt_password_handler);
 
     pthread_mutex_lock(&context.tasks_mutex);
     while (context.tasks_running != 0)

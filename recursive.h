@@ -6,9 +6,8 @@
 #include <stdbool.h>
 #include <ucontext.h>
 
-
 // MINSIGSTKSZ is not available (???)
-#define STACK_SIZE 131000
+#define STACK_SIZE (1 << 12)
 struct rec_state_t
 {
     ucontext_t main, worker;
