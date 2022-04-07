@@ -54,6 +54,9 @@ gn_worker(void *arg)
                 task = *context->rec_state->task;
                 context->done = !rec_next(context->rec_state);
                 break;
+            default:
+                done = true;
+                break;
             }
         }
         pthread_mutex_unlock(&context->mutex);

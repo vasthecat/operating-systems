@@ -62,7 +62,7 @@ rec_init(struct rec_state_t *state, struct task_t *task, struct config_t *config
     state->worker.uc_link = &state->main;
     makecontext(&state->worker,
                 (void (*) (void)) bruteforce_rec_cooperative,
-                3, config, (void *) state, cooperative_handler);
+                2, config, state);
     swapcontext(&state->main, &state->worker);
 }
 
