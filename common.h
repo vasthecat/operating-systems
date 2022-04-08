@@ -24,6 +24,8 @@ enum run_mode_t
     M_SINGLE,
     M_MULTI,
     M_GENERATOR,
+    M_SERVER,
+    M_CLIENT,
 };
 
 struct config_t
