@@ -24,7 +24,7 @@ run_client(struct task_t *task, struct config_t *config)
 	
 	struct sockaddr_in server_address;
 	server_address.sin_family = AF_INET;
-	server_address.sin_port = htons(9000);
+	server_address.sin_port = htons(config->port);
 	server_address.sin_addr.s_addr = INADDR_ANY;
 
 	if (connect(network_socket,

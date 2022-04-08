@@ -35,6 +35,7 @@ struct config_t
     enum brute_mode_t brute_mode;
     enum run_mode_t run_mode;
     char *hash;
+    int port;
 };
 
 typedef bool (*password_handler_t)(void *, struct task_t *);
