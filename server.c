@@ -26,11 +26,8 @@
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-
 struct srv_context_t
 {
-    sem_t slots_available;
-
     volatile int tasks_running;
     pthread_mutex_t tasks_mutex;
     pthread_cond_t tasks_cond;
@@ -58,16 +55,13 @@ struct params_t
 static bool
 send_task(struct task_t *task, int client_sfd)
 {
-    printf("Sending task\n");
     send(client_sfd, (char *) task, sizeof(struct task_t), 0);
 
-    printf("Receiving response\n");
     char size;
     recv(client_sfd, &size, sizeof(size), 0);
-    printf("Got size: %i\n", size);
 
     if (size != 0)
-        recv(client_sfd, task->password, sizeof(task->password), 0);
+        recv(client_sfd, task->password, 3, 0);
 
     return size != 0;
 }
@@ -75,7 +69,6 @@ send_task(struct task_t *task, int client_sfd)
 static void *
 serve_client(void *arg)
 {
-    printf("Serving client\n");
     struct params_t *params = (struct params_t *) arg;
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     struct config_t *config = context->config;
@@ -113,18 +106,16 @@ serve_client(void *arg)
 
         if (send_task(&task, client_sfd))
         {
-            printf("ae: %s\n", task.password);
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
             context->done = true;
         }
     }
 
-    printf("Exiting serve_client\n");
-
     pthread_mutex_lock(&context->tasks_mutex);
     --context->tasks_running;
     pthread_mutex_unlock(&context->tasks_mutex);
+
 
     if (context->tasks_running == 0)
         pthread_cond_signal(&context->tasks_cond);
@@ -147,15 +138,11 @@ srv_server(void *arg)
             handle_error("accept");
         printf("Got new connection...\n");
 
-        /* sem_wait(&context->slots_available); */
-
         pthread_mutex_lock(&context->tasks_mutex);
         ++context->tasks_running;
         pthread_mutex_unlock(&context->tasks_mutex);
 
-        printf("Starting client thread\n");
-
-        pthread_t thread; // Not joined
+        pthread_t thread; // Not joined, should end by itself
         pthread_create(&thread, NULL, serve_client,
                        (void *) &(struct params_t) { context, client_socket });
     }
@@ -167,7 +154,6 @@ bool
 run_server(struct task_t *task, struct config_t *config)
 {
     struct srv_context_t *context = NULL;
-
 
     task->from = 2;
     task->to = config->length;
@@ -212,25 +198,20 @@ run_server(struct task_t *task, struct config_t *config)
     if (listen(server_socket, MAX_CLIENTS) == -1)
         handle_error("listen");
 
-    /* Now we can accept incoming connections one
-    at a time using accept(2) */
-
-
     pthread_t server_thread;
     pthread_create(&server_thread, NULL, srv_server, 
                    (void *) &(struct params_t) { context, server_socket });
 
     pthread_mutex_lock(&context->tasks_mutex);
-    /* while (context->tasks_running != 0) */
-        pthread_cond_wait(&context->tasks_cond, &context->tasks_mutex);
+    pthread_cond_wait(&context->tasks_cond, &context->tasks_mutex);
     pthread_mutex_unlock(&context->tasks_mutex);
 
-    printf("Canceling threads...\n");
+    memcpy(task->password, context->password, sizeof(context->password));
 
     pthread_cancel(server_thread);
     pthread_join(server_thread, NULL);
 
     close(server_socket);
 
-    return false;
+    return context->found;
 }

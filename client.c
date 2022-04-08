@@ -47,7 +47,7 @@ run_client(struct task_t *task, struct config_t *config)
         if (found)
         {
             char msg[] = { sizeof(task->password) };
-            send(network_socket, msg, sizeof(int), 0);
+            send(network_socket, msg, sizeof(char), 0);
             send(network_socket, task->password, sizeof(task->password), 0);
         }
         else
