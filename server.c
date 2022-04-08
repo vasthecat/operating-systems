@@ -61,7 +61,7 @@ send_task(struct task_t *task, int client_sfd)
     recv(client_sfd, &size, sizeof(size), 0);
 
     if (size != 0)
-        recv(client_sfd, task->password, 3, 0);
+        recv(client_sfd, task->password, size, 0);
 
     return size != 0;
 }
@@ -115,7 +115,6 @@ serve_client(void *arg)
     pthread_mutex_lock(&context->tasks_mutex);
     --context->tasks_running;
     pthread_mutex_unlock(&context->tasks_mutex);
-
 
     if (context->tasks_running == 0)
         pthread_cond_signal(&context->tasks_cond);

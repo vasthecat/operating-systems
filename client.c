@@ -48,7 +48,7 @@ run_client(struct task_t *task, struct config_t *config)
         {
             char msg[] = { sizeof(task->password) };
             send(network_socket, msg, sizeof(char), 0);
-            send(network_socket, task->password, sizeof(task->password), 0);
+            send(network_socket, task->password, msg[0], 0);
         }
         else
         {
