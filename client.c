@@ -36,7 +36,7 @@ run_client(struct task_t *task, struct config_t *config)
                 sizeof(server_address)))
     {
         handle_error("connection");
-	}
+    }
     printf("Connected to server\n");
 
     struct st_context_t st_context;
@@ -61,7 +61,7 @@ run_client(struct task_t *task, struct config_t *config)
         }
     }
 
-	close(network_socket);
+    close(network_socket);
 
-	return found;
+    return found;
 }
