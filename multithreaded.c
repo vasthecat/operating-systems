@@ -90,6 +90,7 @@ multithreaded(struct task_t *task, struct config_t *config)
     }
 
     task->from = 2;
+    if (config->length < 3) task->from = 1;
     task->to = config->length;
 
     process_task(task, config, &context, mt_password_handler);
