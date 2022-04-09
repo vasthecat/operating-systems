@@ -1,0 +1,11 @@
+on: [push]
+jobs:
+  test-project:
+    runs-on: ['debian-latest']
+    steps:
+      - uses: actions/checkout@main
+      - uses: actions/setup-python@v2
+      - run: pip install pytest
+      - run: make
+      - run: pytest
+
