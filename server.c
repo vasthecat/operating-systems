@@ -123,7 +123,7 @@ send_task(const int client_sfd, struct task_t *task, bool *result)
     status = send(client_sfd, (char *) task, sizeof(struct task_t), 0);
     if (status <= 0) return -1;
 
-    char size;
+    int size;
     status = recv(client_sfd, &size, sizeof(size), 0);
     if (status <= 0) return -1;
 

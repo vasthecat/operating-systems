@@ -50,14 +50,14 @@ run_client(struct task_t *task, struct config_t *config)
         found = process_task(task, config, &st_context, st_password_handler);
         if (found)
         {
-            char msg[] = { sizeof(task->password) };
-            send(network_socket, msg, sizeof(char), 0);
-            send(network_socket, task->password, msg[0], 0);
+            int msg = (int) sizeof(task->password);
+            send(network_socket, &msg, sizeof(int), 0);
+            send(network_socket, task->password, msg, 0);
         }
         else
         {
-            char msg[] = { 0 };
-            send(network_socket, msg, sizeof(char), 0);
+            int msg = 0;
+            send(network_socket, &msg, sizeof(int), 0);
         }
     }
 
