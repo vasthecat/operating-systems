@@ -16,7 +16,7 @@ parse_opts(struct config_t *config, int argc, char *argv[])
 {
     int opt;
     opterr = 1;
-    while ((opt = getopt(argc, argv, "irymsgxca:l:h:p:")) != -1)
+    while ((opt = getopt(argc, argv, "irymsgxca:l:h:j:p:")) != -1)
     {
         switch (opt)
         {
@@ -41,6 +41,9 @@ parse_opts(struct config_t *config, int argc, char *argv[])
             break;
         case 'h':
             config->hash = optarg;
+            break;
+        case 'j':
+            config->address = optarg;
             break;
         case 'p':
             config->port = atoi(optarg);
@@ -76,6 +79,7 @@ main(int argc, char *argv[])
         .brute_mode = M_ITERATIVE,
         .run_mode = M_SINGLE,
         .hash = "hiwMxUWeODzGE", // hi + ccc
+        .address = "127.0.0.1",
         .port = 9000,
     };
     parse_opts(&config, argc, argv);
