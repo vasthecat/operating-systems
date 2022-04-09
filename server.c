@@ -26,24 +26,87 @@
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
+struct node_t
+{
+    int socket_fd;
+    pthread_t thread_id;
+};
+
+struct set_t
+{
+    size_t size, capacity;
+    struct node_t *data;
+};
+
+void
+set_init(struct set_t *set)
+{
+    set->size = 0;
+    set->capacity = 2;
+    set->data = calloc(set->capacity, sizeof(struct node_t));
+}
+
+void
+set_insert(struct set_t *set, struct node_t node)
+{
+    set->data[set->size] = node;
+    set->size++;
+    if (set->size == set->capacity)
+    {
+        set->capacity *= 2;
+        set->data = realloc(set->data, set->capacity);
+    }
+}
+
+// More convenient than set_insert in this case
+struct node_t *
+set_take_last(struct set_t *set)
+{
+    set->size++;
+    if (set->size == set->capacity)
+    {
+        set->capacity *= 2;
+        set->data = realloc(set->data, set->capacity);
+    }
+    return &set->data[set->size - 1];
+}
+
+void
+set_remove_sock(struct set_t *set, int socket_fd)
+{
+    int idx = 0;
+    for (int i = 0; i < set->size; ++i)
+    {
+        if (set->data[i].socket_fd == socket_fd)
+        {
+            idx = i;
+            break;
+        }
+    }
+    set->data[idx] = set->data[set->size - 1];
+    set->size--;
+}
+
+void
+set_destroy(struct set_t *set)
+{
+    free(set->data);
+}
+
 struct srv_context_t
 {
     volatile int tasks_running;
     pthread_mutex_t tasks_mutex;
     pthread_cond_t tasks_cond;
 
-    pthread_mutex_t mutex;
+    struct set_t set;
+    struct queue_t queue;
     password_t password;
     char *hash;
     volatile bool found;
     volatile bool done;
 
     struct config_t *config;
-
-    union {
-        struct iter_state_t iter_state[0];
-        struct rec_state_t rec_state[0];
-    };
 };
 
 struct params_t
@@ -52,18 +115,23 @@ struct params_t
     int socket_fd;
 };
 
-static bool
-send_task(struct task_t *task, int client_sfd)
+static int
+send_task(const int client_sfd, struct task_t *task, bool *result)
 {
-    send(client_sfd, (char *) task, sizeof(struct task_t), 0);
+    int status;
+
+    status = send(client_sfd, (char *) task, sizeof(struct task_t), 0);
+    if (status <= 0) return -1;
 
     char size;
-    recv(client_sfd, &size, sizeof(size), 0);
+    status = recv(client_sfd, &size, sizeof(size), 0);
+    if (status <= 0) return -1;
 
     if (size != 0)
         recv(client_sfd, task->password, size, 0);
 
-    return size != 0;
+    *result = (size != 0);
+    return 0;
 }
 
 static void *
@@ -71,54 +139,66 @@ serve_client(void *arg)
 {
     struct params_t *params = (struct params_t *) arg;
     struct srv_context_t *context = (struct srv_context_t *) params->context;
-    struct config_t *config = context->config;
     int client_sfd = params->socket_fd;
 
     while (true)
     {
         struct task_t task;
-        pthread_mutex_lock(&context->mutex);
-        bool done = context->done;
-        if (!done)
-        {
-            switch (config->brute_mode)
-            {
-            case M_ITERATIVE:
-                task = *context->iter_state->task;
-                context->done = !iter_next(context->iter_state);
-                break;
-            case M_RECURSIVE:
-            case M_REC_ITERATOR:
-                task = *context->rec_state->task;
-                context->done = !rec_next(context->rec_state);
-                break;
-            default:
-                done = true;
-                break;
-            }
-        }
-        pthread_mutex_unlock(&context->mutex);
-
-        if (done || context->found) break;
+        queue_pop(&context->queue, &task);
 
         task.to = task.from;
         task.from = 0;
-
-        if (send_task(&task, client_sfd))
+        bool found = false;
+        int status = send_task(client_sfd, &task, &found);
+        if (status == -1)
+        {
+            queue_push(&context->queue, &task);
+            set_remove_sock(&context->set, client_sfd);
+            close(client_sfd);
+            break;
+        }
+        if (found)
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
             context->done = true;
         }
+
+        pthread_mutex_lock(&context->tasks_mutex);
+        --context->tasks_running;
+        pthread_mutex_unlock(&context->tasks_mutex);
+
+        if (context->tasks_running == 0 || context->found)
+            pthread_cond_signal(&context->tasks_cond);
     }
 
-    pthread_mutex_lock(&context->tasks_mutex);
-    --context->tasks_running;
-    pthread_mutex_unlock(&context->tasks_mutex);
+    return NULL;
+}
 
-    if (context->tasks_running == 0)
-        pthread_cond_signal(&context->tasks_cond);
+static bool
+srv_password_handler(void *context, struct task_t *task)
+{
+    struct srv_context_t *ctx = (struct srv_context_t *) context;
 
+    pthread_mutex_lock(&ctx->tasks_mutex);
+    ++ctx->tasks_running;
+    pthread_mutex_unlock(&ctx->tasks_mutex);
+
+    queue_push(&ctx->queue, task);
+    return (ctx->password[0] != 0);
+}
+
+static void *
+srv_producer(void *arg)
+{
+    struct srv_context_t *context = (struct srv_context_t *) arg;
+
+    struct task_t task;
+    task.from = 2;
+    task.to = context->config->length;
+
+    process_task(&task, context->config, context, srv_password_handler);
+    context->done = true;
     return NULL;
 }
 
@@ -129,21 +209,19 @@ srv_server(void *arg)
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     int server_sfd = params->socket_fd;
 
-    printf("Waiting for new connections...\n");
     while (true)
     {
+        // Printing to stderr to be able to check output in tests
+        fprintf(stderr, "Waiting for new connections...\n");
         int client_socket = accept(server_sfd, NULL, NULL);
         if (client_socket == -1)
             handle_error("accept");
-        printf("Got new connection...\n");
+        fprintf(stderr, "Got new connection...\n");
 
-        pthread_mutex_lock(&context->tasks_mutex);
-        ++context->tasks_running;
-        pthread_mutex_unlock(&context->tasks_mutex);
-
-        pthread_t thread; // Not joined, should end by itself
-        pthread_create(&thread, NULL, serve_client,
+        struct node_t *node = set_take_last(&context->set);
+        pthread_create(&node->thread_id, NULL, serve_client,
                        (void *) &(struct params_t) { context, client_socket });
+        node->socket_fd = client_socket;
     }
 
     return NULL;
@@ -152,35 +230,17 @@ srv_server(void *arg)
 bool
 run_server(struct task_t *task, struct config_t *config)
 {
-    struct srv_context_t *context = NULL;
-
-    task->from = 2;
-    task->to = config->length;
-    switch (config->brute_mode)
-    {
-    case M_ITERATIVE:
-        context = alloca(sizeof(struct srv_context_t)
-                         + sizeof(struct iter_state_t));
-        iter_init(context->iter_state, task, config->alphabet);
-        break;
-    case M_RECURSIVE:
-    case M_REC_ITERATOR:
-        context = alloca(sizeof(struct srv_context_t)
-                         + sizeof(struct rec_state_t));
-        rec_init(context->rec_state, task, config);
-        break;
-    }
-
-    context->tasks_running = 0;
-    pthread_mutex_init(&context->tasks_mutex, NULL);
-    pthread_cond_init(&context->tasks_cond, NULL);
-
-    context->hash = config->hash;
-    pthread_mutex_init(&context->mutex, NULL);
-    context->password[0] = 0;
-    context->config = config;
-    context->done = false;
-    context->found = false;
+    struct srv_context_t context;
+    context.hash = config->hash;
+    context.tasks_running = 0;
+    pthread_mutex_init(&context.tasks_mutex, NULL);
+    pthread_cond_init(&context.tasks_cond, NULL);
+    context.password[0] = 0;
+    context.config = config;
+    context.done = false;
+    context.found = false;
+    queue_init(&context.queue);
+    set_init(&context.set);
 
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket == -1)
@@ -199,18 +259,34 @@ run_server(struct task_t *task, struct config_t *config)
 
     pthread_t server_thread;
     pthread_create(&server_thread, NULL, srv_server, 
-                   (void *) &(struct params_t) { context, server_socket });
+                   (void *) &(struct params_t) { &context, server_socket });
 
-    pthread_mutex_lock(&context->tasks_mutex);
-    pthread_cond_wait(&context->tasks_cond, &context->tasks_mutex);
-    pthread_mutex_unlock(&context->tasks_mutex);
+    pthread_t producer_thread;
+    pthread_create(&producer_thread, NULL, srv_producer, (void *) &context);
 
-    memcpy(task->password, context->password, sizeof(context->password));
+    pthread_mutex_lock(&context.tasks_mutex);
+    pthread_cond_wait(&context.tasks_cond, &context.tasks_mutex);
+    pthread_mutex_unlock(&context.tasks_mutex);
+
+    memcpy(task->password, context.password, sizeof(context.password));
+
+    for (int i = 0; i < context.set.size; ++i)
+    {
+        pthread_t thread = context.set.data[i].thread_id;
+        pthread_cancel(thread);
+        pthread_join(thread, NULL);
+        close(context.set.data[i].socket_fd);
+    }
 
     pthread_cancel(server_thread);
     pthread_join(server_thread, NULL);
 
+    pthread_cancel(producer_thread);
+    pthread_join(producer_thread, NULL);
+
+    queue_destroy(&context.queue);
+    set_destroy(&context.set);
     close(server_socket);
 
-    return context->found;
+    return context.found;
 }
