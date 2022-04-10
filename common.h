@@ -41,4 +41,10 @@ struct config_t
 
 typedef bool (*password_handler_t)(void *, struct task_t *);
 
+int
+sendall(const int socket_fd, const void *data, const int size, const int flags);
+
+int
+recvall(const int socket_fd, void *data, const int size, const int flags);
+
 #endif // COMMON_H

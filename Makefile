@@ -3,7 +3,7 @@ CFLAGS=-Wall -g -std=c99
 LIBS=-lcrypt -lpthread
 DEPS=
 
-OBJ=main.o iterative.o recursive.o generator.o multithreaded.o singlethreaded.o queue.o server.o client.o
+OBJ=main.o common.o iterative.o recursive.o generator.o multithreaded.o singlethreaded.o queue.o server.o client.o
 TARGET=brute
 
 ifeq ($(shell uname), Darwin)

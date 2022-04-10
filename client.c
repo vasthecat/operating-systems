@@ -44,20 +44,26 @@ run_client(struct task_t *task, struct config_t *config)
     st_context.cd.initialized = 0;
 
     bool found = false;
+    int status;
     while (!found)
     {
-        recv(network_socket, task, sizeof(struct task_t), 0);
+        status = recvall(network_socket, task, sizeof(struct task_t), 0);
+        if (status == -1) break;
+
         found = process_task(task, config, &st_context, st_password_handler);
         if (found)
         {
             int msg = (int) sizeof(task->password);
-            send(network_socket, &msg, sizeof(int), 0);
-            send(network_socket, task->password, msg, 0);
+            status = send(network_socket, &msg, sizeof(int), 0);
+            if (status == -1) break;
+            status = send(network_socket, task->password, msg, 0);
+            if (status == -1) break;
         }
         else
         {
             int msg = 0;
-            send(network_socket, &msg, sizeof(int), 0);
+            status = send(network_socket, &msg, sizeof(int), 0);
+            if (status == -1) break;
         }
     }
 

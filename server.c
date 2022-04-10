@@ -4,6 +4,7 @@
 #include "iterative.h"
 #include "recursive.h"
 #include "queue.h"
+#include "common.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -123,36 +124,6 @@ struct params_t
 };
 
 static int
-sendall(const int socket_fd, const void *data, const int size, const int flags)
-{
-    const void *bytes = data;
-    size_t bytes_to_write = size;
-    while (bytes_to_write > 0)
-    {
-        int written = send(socket_fd, bytes, bytes_to_write, flags);
-        if (written == -1) return -1;
-        bytes_to_write -= written;
-        bytes += written;
-    }
-    return size;
-}
-
-static int
-recvall(const int socket_fd, void *data, const int size, const int flags)
-{
-    void *bytes = data;
-    size_t bytes_to_read = size;
-    while (bytes_to_read > 0)
-    {
-        int nread = recv(socket_fd, bytes, bytes_to_read, flags);
-        if (nread == -1) return -1;
-        bytes_to_read -= nread;
-        bytes += nread;
-    }
-    return size;
-}
-
-static int
 send_task(const int client_sfd, struct task_t *task, bool *result)
 {
     int status;
@@ -180,6 +151,7 @@ serve_client(void *arg)
     struct params_t *params = (struct params_t *) arg;
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     int client_sfd = params->socket_fd;
+    free(params);
 
     while (true)
     {
@@ -249,9 +221,12 @@ srv_server(void *arg)
 
         pthread_mutex_lock(&context->set_mutex);
         struct node_t *node = set_take_last(&context->set);
-        pthread_create(&node->thread_id, NULL, serve_client,
-                       (void *) &(struct params_t) { context, client_socket });
         node->socket_fd = client_socket;
+
+        struct params_t *params = malloc(sizeof(struct params_t));
+        params->context = context;
+        params->socket_fd = client_socket;
+        pthread_create(&node->thread_id, NULL, serve_client, params);
         pthread_mutex_unlock(&context->set_mutex);
     }
 
