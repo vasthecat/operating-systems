@@ -3,6 +3,9 @@
 #include "multithreaded.h"
 #include "generator.h"
 
+#include "client.h"
+#include "server.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -13,7 +16,7 @@ parse_opts(struct config_t *config, int argc, char *argv[])
 {
     int opt;
     opterr = 1;
-    while ((opt = getopt(argc, argv, "irymsga:l:h:")) != -1)
+    while ((opt = getopt(argc, argv, "irymsgxca:l:h:j:p:")) != -1)
     {
         switch (opt)
         {
@@ -39,6 +42,12 @@ parse_opts(struct config_t *config, int argc, char *argv[])
         case 'h':
             config->hash = optarg;
             break;
+        case 'j':
+            config->address = optarg;
+            break;
+        case 'p':
+            config->port = atoi(optarg);
+            break;
         case 's':
             config->run_mode = M_SINGLE;
             break;
@@ -47,6 +56,12 @@ parse_opts(struct config_t *config, int argc, char *argv[])
             break;
         case 'g':
             config->run_mode = M_GENERATOR;
+            break;
+        case 'x':
+            config->run_mode = M_SERVER;
+            break;
+        case 'c':
+            config->run_mode = M_CLIENT;
             break;
         default:
             exit(1);
@@ -64,6 +79,8 @@ main(int argc, char *argv[])
         .brute_mode = M_ITERATIVE,
         .run_mode = M_SINGLE,
         .hash = "hiwMxUWeODzGE", // hi + ccc
+        .address = "127.0.0.1",
+        .port = 9000,
     };
     parse_opts(&config, argc, argv);
 
@@ -81,6 +98,12 @@ main(int argc, char *argv[])
         break;
     case M_GENERATOR:
         found = generator(&task, &config);
+        break;
+    case M_SERVER:
+        found = run_server(&task, &config);
+        break;
+    case M_CLIENT:
+        found = run_client(&task, &config);
         break;
     }
 
