@@ -114,6 +114,9 @@ struct srv_context_t
     volatile bool found;
     volatile bool done;
 
+    pthread_mutex_t thread_started_mutex;
+    pthread_cond_t thread_started;
+
     struct config_t *config;
 };
 
@@ -151,7 +154,7 @@ serve_client(void *arg)
     struct params_t *params = (struct params_t *) arg;
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     int client_sfd = params->socket_fd;
-    free(params);
+    pthread_cond_signal(&context->thread_started);
 
     while (true)
     {
@@ -220,13 +223,17 @@ srv_server(void *arg)
         fprintf(stderr, "Got new connection...\n");
 
         pthread_mutex_lock(&context->set_mutex);
+
         struct node_t *node = set_take_last(&context->set);
         node->socket_fd = client_socket;
+        pthread_create(&node->thread_id, NULL, serve_client,
+                       &(struct params_t) { context, client_socket });
 
-        struct params_t *params = malloc(sizeof(struct params_t));
-        params->context = context;
-        params->socket_fd = client_socket;
-        pthread_create(&node->thread_id, NULL, serve_client, params);
+        pthread_mutex_lock(&context->thread_started_mutex);
+        pthread_cond_wait(&context->thread_started,
+                          &context->thread_started_mutex);
+        pthread_mutex_unlock(&context->thread_started_mutex);
+
         pthread_mutex_unlock(&context->set_mutex);
     }
 
@@ -242,6 +249,8 @@ run_server(struct task_t *task, struct config_t *config)
     pthread_mutex_init(&context.tasks_mutex, NULL);
     pthread_mutex_init(&context.set_mutex, NULL);
     pthread_cond_init(&context.tasks_cond, NULL);
+    pthread_mutex_init(&context.thread_started_mutex, NULL);
+    pthread_cond_init(&context.thread_started, NULL);
     context.password[0] = 0;
     context.config = config;
     context.done = false;

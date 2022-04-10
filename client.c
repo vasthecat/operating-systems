@@ -54,15 +54,15 @@ run_client(struct task_t *task, struct config_t *config)
         if (found)
         {
             int msg = (int) sizeof(task->password);
-            status = send(network_socket, &msg, sizeof(int), 0);
+            status = sendall(network_socket, &msg, sizeof(int), 0);
             if (status == -1) break;
-            status = send(network_socket, task->password, msg, 0);
+            status = sendall(network_socket, task->password, msg, 0);
             if (status == -1) break;
         }
         else
         {
             int msg = 0;
-            status = send(network_socket, &msg, sizeof(int), 0);
+            status = sendall(network_socket, &msg, sizeof(int), 0);
             if (status == -1) break;
         }
     }
