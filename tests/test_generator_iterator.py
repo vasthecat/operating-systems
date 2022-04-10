@@ -1,14 +1,4 @@
-import subprocess as sb
-
-
-def run(command):
-    return sb.run(command.split(), capture_output=True) \
-               .stdout \
-               .decode() \
-               .strip()
-
-def hash_password(password, salt="hi"):
-    return run(f"./encr -p {password} -s {salt}")
+from runners import run, hash_password, performance_tester
 
 
 def base_call_found(password, alphabet="abc"):
@@ -37,32 +27,6 @@ def test_gen_iterator_length1_last():
 def test_gen_iterator_length1_notfound():
     base_call_notfound("q")
 
-# Length 2
-def test_gen_iterator_length2_first():
-    base_call_found("aa")
-
-def test_gen_iterator_length2():
-    base_call_found("bc")
-
-def test_gen_iterator_length2_last():
-    base_call_found("cc")
-
-def test_gen_iterator_length2_notfound():
-    base_call_notfound("qa")
-
-# Length 3
-def test_gen_iterator_length3_first():
-    base_call_found("aaa")
-
-def test_gen_iterator_length3():
-    base_call_found("bac")
-
-def test_gen_iterator_length3_last():
-    base_call_found("ccc")
-
-def test_gen_iterator_length3_notfound():
-    base_call_notfound("qaa")
-
 # Length 7
 def test_gen_iterator_length7_first():
     base_call_found("aaaaaaa")
@@ -86,19 +50,27 @@ def test_gen_iterator_bigger_notfound():
 # Performance test
 from time import time
 def test_performance():
-    t1 = time()
-    base_call_notfound("qqqqqqqqqq")
+    base_length = 0
+    tl_1 = 0
+    for l in range(3, 20):
+        t1 = time()
+        base_call_notfound("q" * l)
+        t2 = time()
+        tl_1 = t2 - t1
+        if tl_1 > 0.5:
+            base_length = l
+            break
+
     t2 = time()
-    base_call_notfound("qqqqqqqqqqq")
+    base_call_notfound("q" * (base_length + 1))
     t3 = time()
-    base_call_notfound("qqqqqqqqqqqq")
+    base_call_notfound("q" * (base_length + 2))
     t4 = time()
 
-    tl11 = t2 - t1
-    tl12 = t3 - t2
-    tl13 = t4 - t3
+    tl_2 = t3 - t2
+    tl_3 = t4 - t3
 
-    r1 = tl12 / tl11
-    r2 = tl13 / tl12
+    r1 = tl_2 / tl_1
+    r2 = tl_3 / tl_2
 
     assert abs(r1 - r2) <= 1
