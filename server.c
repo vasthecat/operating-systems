@@ -44,6 +44,8 @@ set_init(struct set_t *set)
     set->size = 0;
     set->capacity = 2;
     set->data = calloc(set->capacity, sizeof(struct node_t));
+    if (set->data == NULL)
+        handle_error("Couldn't allocate space for set_t");
 }
 
 void
@@ -55,6 +57,8 @@ set_insert(struct set_t *set, struct node_t node)
     {
         set->capacity *= 2;
         set->data = realloc(set->data, set->capacity);
+        if (set->data == NULL)
+            handle_error("Couldn't reallocate space for set_t");
     }
 }
 
@@ -67,6 +71,8 @@ set_take_last(struct set_t *set)
     {
         set->capacity *= 2;
         set->data = realloc(set->data, set->capacity);
+        if (set->data == NULL)
+            handle_error("Couldn't reallocate space for set_t");
     }
     return &set->data[set->size - 1];
 }
@@ -100,6 +106,7 @@ struct srv_context_t
     pthread_cond_t tasks_cond;
 
     struct set_t set;
+    pthread_mutex_t set_mutex;
     struct queue_t queue;
     password_t password;
     char *hash;
@@ -116,19 +123,51 @@ struct params_t
 };
 
 static int
+sendall(const int socket_fd, const void *data, const int size, const int flags)
+{
+    const void *bytes = data;
+    size_t bytes_to_write = size;
+    while (bytes_to_write > 0)
+    {
+        int written = send(socket_fd, bytes, bytes_to_write, flags);
+        if (written == -1) return -1;
+        bytes_to_write -= written;
+        bytes += written;
+    }
+    return size;
+}
+
+static int
+recvall(const int socket_fd, void *data, const int size, const int flags)
+{
+    void *bytes = data;
+    size_t bytes_to_read = size;
+    while (bytes_to_read > 0)
+    {
+        int nread = recv(socket_fd, bytes, bytes_to_read, flags);
+        if (nread == -1) return -1;
+        bytes_to_read -= nread;
+        bytes += nread;
+    }
+    return size;
+}
+
+static int
 send_task(const int client_sfd, struct task_t *task, bool *result)
 {
     int status;
-
-    status = send(client_sfd, (char *) task, sizeof(struct task_t), 0);
-    if (status <= 0) return -1;
+    status = sendall(client_sfd, task, sizeof(struct task_t), 0);
+    if (status == -1) return -1;
 
     int size;
-    status = recv(client_sfd, &size, sizeof(size), 0);
-    if (status <= 0) return -1;
+    status = recvall(client_sfd, &size, sizeof(size), 0);
+    if (status == -1) return -1;
 
     if (size != 0)
-        recv(client_sfd, task->password, size, 0);
+    {
+        status = recv(client_sfd, task->password, size, 0);
+        if (status == -1) return -1;
+    }
 
     *result = (size != 0);
     return 0;
@@ -153,8 +192,6 @@ serve_client(void *arg)
         if (status == -1)
         {
             queue_push(&context->queue, &task);
-            set_remove_sock(&context->set, client_sfd);
-            close(client_sfd);
             break;
         }
         if (found)
@@ -171,6 +208,11 @@ serve_client(void *arg)
         if (context->tasks_running == 0 || context->found)
             pthread_cond_signal(&context->tasks_cond);
     }
+
+    pthread_mutex_lock(&context->set_mutex);
+    set_remove_sock(&context->set, client_sfd);
+    close(client_sfd);
+    pthread_mutex_unlock(&context->set_mutex);
 
     return NULL;
 }
@@ -218,10 +260,12 @@ srv_server(void *arg)
             handle_error("accept");
         fprintf(stderr, "Got new connection...\n");
 
+        pthread_mutex_lock(&context->set_mutex);
         struct node_t *node = set_take_last(&context->set);
         pthread_create(&node->thread_id, NULL, serve_client,
                        (void *) &(struct params_t) { context, client_socket });
         node->socket_fd = client_socket;
+        pthread_mutex_unlock(&context->set_mutex);
     }
 
     return NULL;
@@ -270,6 +314,7 @@ run_server(struct task_t *task, struct config_t *config)
 
     memcpy(task->password, context.password, sizeof(context.password));
 
+    pthread_mutex_lock(&context.set_mutex);
     for (int i = 0; i < context.set.size; ++i)
     {
         pthread_t thread = context.set.data[i].thread_id;
@@ -277,6 +322,7 @@ run_server(struct task_t *task, struct config_t *config)
         pthread_join(thread, NULL);
         close(context.set.data[i].socket_fd);
     }
+    pthread_mutex_unlock(&context.set_mutex);
 
     pthread_cancel(server_thread);
     pthread_join(server_thread, NULL);
