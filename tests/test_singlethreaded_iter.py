@@ -83,3 +83,22 @@ def test_st_iter_bigger():
 def test_st_iter_bigger_notfound():
     base_call_notfound("hellodf", "defghl")
 
+# Performance test
+from time import time
+def test_performance():
+    t1 = time()
+    base_call_notfound("qqqqqqqqqq")
+    t2 = time()
+    base_call_notfound("qqqqqqqqqqq")
+    t3 = time()
+    base_call_notfound("qqqqqqqqqqqq")
+    t4 = time()
+
+    tl11 = t2 - t1
+    tl12 = t3 - t2
+    tl13 = t4 - t3
+
+    r1 = tl12 / tl11
+    r2 = tl13 / tl12
+
+    assert abs(r1 - r2) <= 0.15
