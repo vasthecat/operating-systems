@@ -140,6 +140,9 @@ close_client(int client_sfd)
     status = sendall(client_sfd, &length, sizeof(length), 0);
     if (status == -1) return -1;
 
+    sleep(0.1);
+
+    shutdown(client_sfd, SHUT_RDWR);
     close(client_sfd);
     return 0;
 }
