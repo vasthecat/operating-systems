@@ -101,4 +101,4 @@ def test_performance():
     r1 = tl12 / tl11
     r2 = tl13 / tl12
 
-    assert abs(r1 - r2) <= 0.15
+    assert abs(r1 - r2) <= 1
