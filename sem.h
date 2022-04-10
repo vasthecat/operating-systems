@@ -22,7 +22,10 @@ void
 sem_wait(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
-    pthread_cleanup_push ((void (*) (void*))pthread_mutex_unlock, &sem->value_mutex);
+    pthread_cleanup_push(
+        (void (*) (void*)) pthread_mutex_unlock,
+        &sem->value_mutex
+    );
     while (sem->value == 0)
         pthread_cond_wait(&sem->sem_cond, &sem->value_mutex);
     pthread_cleanup_pop(!0);
