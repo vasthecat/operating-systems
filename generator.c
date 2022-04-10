@@ -81,6 +81,7 @@ generator(struct task_t *task, struct config_t *config)
     struct gn_context_t *context = NULL;
 
     task->from = 2;
+    if (config->length < 3) task->from = 1;
     task->to = config->length;
     switch (config->brute_mode)
     {

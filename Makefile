@@ -12,12 +12,15 @@ override LIBS+=-L./crypt-macos
 override DEPS+=crypt-macos/libcrypt.a
 endif
 
-all: $(TARGET)
+all: $(TARGET) encr
 $(TARGET): $(OBJ) $(DEPS)
 	$(CC) $(CFLAGS) $(OBJ) $(LIBS) -o $@
 
+encr: $(DEPS)
+	$(CC) $(CFLAGS) encr.c $(LIBS) -o $@
+
 clean:
-	rm -f $(OBJ) $(TARGET)
+	rm -f $(OBJ) $(TARGET) encr
 
 ifeq ($(shell uname), Darwin)
 crypt-macos/libcrypt.a:
