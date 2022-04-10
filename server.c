@@ -156,6 +156,7 @@ static int
 send_task(const int client_sfd, struct task_t *task, bool *result)
 {
     int status;
+
     status = sendall(client_sfd, task, sizeof(struct task_t), 0);
     if (status == -1) return -1;
 
@@ -264,6 +265,7 @@ run_server(struct task_t *task, struct config_t *config)
     context.hash = config->hash;
     context.tasks_running = 0;
     pthread_mutex_init(&context.tasks_mutex, NULL);
+    pthread_mutex_init(&context.set_mutex, NULL);
     pthread_cond_init(&context.tasks_cond, NULL);
     context.password[0] = 0;
     context.config = config;
@@ -290,7 +292,6 @@ run_server(struct task_t *task, struct config_t *config)
     pthread_t server_thread;
     pthread_create(&server_thread, NULL, srv_server, 
                    (void *) &(struct params_t) { &context, server_socket });
-
 
     task->from = 2;
     task->to = config->length;
