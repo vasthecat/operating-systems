@@ -231,20 +231,6 @@ srv_password_handler(void *context, struct task_t *task)
 }
 
 static void *
-srv_producer(void *arg)
-{
-    struct srv_context_t *context = (struct srv_context_t *) arg;
-
-    struct task_t task;
-    task.from = 2;
-    task.to = context->config->length;
-
-    process_task(&task, context->config, context, srv_password_handler);
-    context->done = true;
-    return NULL;
-}
-
-static void *
 srv_server(void *arg)
 {
     struct params_t *params = (struct params_t *) arg;
@@ -305,8 +291,11 @@ run_server(struct task_t *task, struct config_t *config)
     pthread_create(&server_thread, NULL, srv_server, 
                    (void *) &(struct params_t) { &context, server_socket });
 
-    pthread_t producer_thread;
-    pthread_create(&producer_thread, NULL, srv_producer, (void *) &context);
+
+    task->from = 2;
+    task->to = config->length;
+    process_task(task, config, &context, srv_password_handler);
+    context.done = true;
 
     pthread_mutex_lock(&context.tasks_mutex);
     pthread_cond_wait(&context.tasks_cond, &context.tasks_mutex);
@@ -326,9 +315,6 @@ run_server(struct task_t *task, struct config_t *config)
 
     pthread_cancel(server_thread);
     pthread_join(server_thread, NULL);
-
-    pthread_cancel(producer_thread);
-    pthread_join(producer_thread, NULL);
 
     queue_destroy(&context.queue);
     set_destroy(&context.set);
