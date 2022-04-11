@@ -144,6 +144,7 @@ close_client(int client_sfd)
     char res;
     status = recv(client_sfd, &res, sizeof(res), 0);
 
+    shutdown(client_sfd, SHUT_RDWR);
     close(client_sfd);
     return 0;
 }
