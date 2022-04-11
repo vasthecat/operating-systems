@@ -126,11 +126,46 @@ struct params_t
 };
 
 static int
+close_client(int client_sfd)
+{
+    int status;
+
+    // Send tag
+    enum command_t command = CMD_EXIT;
+    status = sendall(client_sfd, &command, sizeof(command), 0);
+    if (status == -1) return -1;
+
+    // Send length
+    int length = 0;
+    status = sendall(client_sfd, &length, sizeof(length), 0);
+    if (status == -1) return -1;
+
+    // Client should close socket on its side and send EOF
+    char res;
+    status = recv(client_sfd, &res, sizeof(res), 0);
+
+    shutdown(client_sfd, SHUT_RDWR);
+    close(client_sfd);
+    return 0;
+}
+
+static int
 send_task(const int client_sfd, struct task_t *task, bool *result)
 {
     int status;
 
-    status = sendall(client_sfd, task, sizeof(struct task_t), 0);
+    // Send tag
+    enum command_t command = CMD_TASK;
+    status = sendall(client_sfd, &command, sizeof(command), 0);
+    if (status == -1) return -1;
+
+    // Send length
+    int length = sizeof(struct task_t);
+    status = sendall(client_sfd, &length, sizeof(length), 0);
+    if (status == -1) return -1;
+
+    // Send value
+    status = sendall(client_sfd, task, length, 0);
     if (status == -1) return -1;
 
     int size;
@@ -186,7 +221,7 @@ serve_client(void *arg)
 
     pthread_mutex_lock(&context->set_mutex);
     set_remove_sock(&context->set, client_sfd);
-    close(client_sfd);
+    close_client(client_sfd);
     pthread_mutex_unlock(&context->set_mutex);
 
     return NULL;
@@ -239,7 +274,7 @@ srv_server(void *arg)
         }
         else
         {
-            close(client_socket);
+            close_client(client_socket);
         }
 
         pthread_cleanup_pop(!0);
@@ -302,7 +337,7 @@ run_server(struct task_t *task, struct config_t *config)
         pthread_t thread = context.set.data[i].thread_id;
         pthread_cancel(thread);
         pthread_join(thread, NULL);
-        close(context.set.data[i].socket_fd);
+        close_client(context.set.data[i].socket_fd);
     }
     pthread_mutex_unlock(&context.set_mutex);
 

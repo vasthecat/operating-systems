@@ -18,6 +18,30 @@
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
+static int
+cl_process_task(int network_socket, struct task_t *task,
+                struct st_context_t *context, struct config_t *config)
+{
+    int status;
+
+    bool found = process_task(task, config, context, st_password_handler);
+    if (found)
+    {
+        int msg = (int) sizeof(task->password);
+        status = sendall(network_socket, &msg, sizeof(int), 0);
+        if (status == -1) return -1;
+        status = sendall(network_socket, task->password, msg, 0);
+        if (status == -1) return -1;
+    }
+    else
+    {
+        int msg = 0;
+        status = sendall(network_socket, &msg, sizeof(int), 0);
+        if (status == -1) return -1;
+    }
+    return 0;
+}
+
 bool
 run_client(struct task_t *task, struct config_t *config)
 {
@@ -47,25 +71,31 @@ run_client(struct task_t *task, struct config_t *config)
     int status;
     while (!found)
     {
-        status = recvall(network_socket, task, sizeof(struct task_t), 0);
+        enum command_t tag;
+        status = recvall(network_socket, &tag, sizeof(tag), 0);
         if (status == -1) break;
 
-        found = process_task(task, config, &st_context, st_password_handler);
-        if (found)
+        int length;
+        status = recvall(network_socket, &length, sizeof(length), 0);
+        if (status == -1) break;
+
+        switch (tag)
         {
-            int msg = (int) sizeof(task->password);
-            status = sendall(network_socket, &msg, sizeof(int), 0);
-            if (status == -1) break;
-            status = sendall(network_socket, task->password, msg, 0);
-            if (status == -1) break;
-        }
-        else
-        {
-            int msg = 0;
-            status = sendall(network_socket, &msg, sizeof(int), 0);
-            if (status == -1) break;
+        case CMD_EXIT:
+            goto exit_label;
+            break;
+        case CMD_TASK:
+            status = recvall(network_socket, task, length, 0);
+            if (status == -1) goto exit_label;
+
+            status = cl_process_task(network_socket, task, &st_context, config);
+            if (status == -1) goto exit_label;
+
+            break;
         }
     }
+
+exit_label:
 
     close(network_socket);
 
