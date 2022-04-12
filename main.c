@@ -3,8 +3,7 @@
 #include "multithreaded.h"
 #include "generator.h"
 
-#include "client.h"
-#include "server.h"
+#include "sync-server.h"
 
 #include <stdio.h>
 #include <stdlib.h>

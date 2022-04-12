@@ -39,12 +39,6 @@ struct config_t
     int port;
 };
 
-enum command_t
-{
-    CMD_EXIT = 1,
-    CMD_TASK,
-};
-
 typedef bool (*password_handler_t)(void *, struct task_t *);
 
 int

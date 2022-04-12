@@ -1,4 +1,4 @@
-#include "server.h"
+#include "sync-server.h"
 
 #include "singlethreaded.h"
 #include "iterative.h"
@@ -16,6 +16,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #ifdef __APPLE__
 #include "sem.h"
@@ -26,6 +27,12 @@
 #define MAX_CLIENTS 50
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
+enum command_t
+{
+    CMD_EXIT = 1,
+    CMD_TASK,
+};
 
 struct node_t
 {
@@ -39,7 +46,7 @@ struct set_t
     struct node_t *data;
 };
 
-void
+static void
 set_init(struct set_t *set)
 {
     set->size = 0;
@@ -49,7 +56,8 @@ set_init(struct set_t *set)
         handle_error("Couldn't allocate space for set_t");
 }
 
-void
+/*
+static void
 set_insert(struct set_t *set, struct node_t node)
 {
     set->data[set->size] = node;
@@ -62,9 +70,10 @@ set_insert(struct set_t *set, struct node_t node)
             handle_error("Couldn't reallocate space for set_t");
     }
 }
+*/
 
 // More convenient than set_insert in this case
-struct node_t *
+static struct node_t *
 set_take_last(struct set_t *set)
 {
     set->size++;
@@ -78,7 +87,7 @@ set_take_last(struct set_t *set)
     return &set->data[set->size - 1];
 }
 
-void
+static void
 set_remove_sock(struct set_t *set, int socket_fd)
 {
     int idx = 0;
@@ -94,7 +103,7 @@ set_remove_sock(struct set_t *set, int socket_fd)
     set->size--;
 }
 
-void
+static void
 set_destroy(struct set_t *set)
 {
     free(set->data);
@@ -349,4 +358,88 @@ run_server(struct task_t *task, struct config_t *config)
     close(server_socket);
 
     return context.found;
+}
+
+static int
+cl_process_task(int network_socket, struct task_t *task,
+                struct st_context_t *context, struct config_t *config)
+{
+    int status;
+
+    bool found = process_task(task, config, context, st_password_handler);
+    if (found)
+    {
+        int msg = (int) sizeof(task->password);
+        status = sendall(network_socket, &msg, sizeof(int), 0);
+        if (status == -1) return -1;
+        status = sendall(network_socket, task->password, msg, 0);
+        if (status == -1) return -1;
+    }
+    else
+    {
+        int msg = 0;
+        status = sendall(network_socket, &msg, sizeof(int), 0);
+        if (status == -1) return -1;
+    }
+    return 0;
+}
+
+bool
+run_client(struct task_t *task, struct config_t *config)
+{
+    int network_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    struct sockaddr_in server_address;
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(config->port);
+
+    struct in_addr address;
+    inet_pton(AF_INET, config->address, &address);
+    server_address.sin_addr.s_addr = address.s_addr;
+
+    if (connect(network_socket,
+                (struct sockaddr *) &server_address,
+                sizeof(server_address)))
+    {
+        handle_error("connection");
+    }
+    printf("Connected to server\n");
+
+    struct st_context_t st_context;
+    st_context.hash = config->hash;
+    st_context.cd.initialized = 0;
+
+    bool found = false;
+    int status;
+    while (!found)
+    {
+        enum command_t tag;
+        status = recvall(network_socket, &tag, sizeof(tag), 0);
+        if (status == -1) break;
+
+        int length;
+        status = recvall(network_socket, &length, sizeof(length), 0);
+        if (status == -1) break;
+
+        switch (tag)
+        {
+        case CMD_EXIT:
+            goto exit_label;
+            break;
+        case CMD_TASK:
+            status = recvall(network_socket, task, length, 0);
+            if (status == -1) goto exit_label;
+
+            status = cl_process_task(network_socket, task, &st_context, config);
+            if (status == -1) goto exit_label;
+
+            break;
+        }
+    }
+
+exit_label:
+
+    close(network_socket);
+
+    return found;
 }
