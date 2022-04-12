@@ -10,6 +10,8 @@ struct task_t
 {
     password_t password;
     int from, to;
+    long id;
+    bool correct;
 };
 
 enum brute_mode_t
@@ -26,6 +28,8 @@ enum run_mode_t
     M_GENERATOR,
     M_SERVER,
     M_CLIENT,
+    M_ASYNC_SERVER,
+    M_ASYNC_CLIENT,
 };
 
 struct config_t

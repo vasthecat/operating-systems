@@ -4,6 +4,7 @@
 #include "generator.h"
 
 #include "sync-server.h"
+#include "async-server.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +16,7 @@ parse_opts(struct config_t *config, int argc, char *argv[])
 {
     int opt;
     opterr = 1;
-    while ((opt = getopt(argc, argv, "irymsgxca:l:h:j:p:")) != -1)
+    while ((opt = getopt(argc, argv, "irymsgxcvba:l:h:j:p:")) != -1)
     {
         switch (opt)
         {
@@ -62,6 +63,12 @@ parse_opts(struct config_t *config, int argc, char *argv[])
         case 'c':
             config->run_mode = M_CLIENT;
             break;
+        case 'v':
+            config->run_mode = M_ASYNC_SERVER;
+            break;
+        case 'b':
+            config->run_mode = M_ASYNC_CLIENT;
+            break;
         default:
             exit(1);
             break;
@@ -103,6 +110,12 @@ main(int argc, char *argv[])
         break;
     case M_CLIENT:
         found = run_client(&task, &config);
+        break;
+    case M_ASYNC_SERVER:
+        found = run_async_server(&task, &config);
+        break;
+    case M_ASYNC_CLIENT:
+        found = run_async_client(&task, &config);
         break;
     }
 
