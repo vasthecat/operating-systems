@@ -13,7 +13,7 @@
 
 struct queue_t
 {
-    struct task_t tasks[8];
+    struct task_t tasks[256];
     int size, capacity;
     int head, tail;
     pthread_mutex_t head_mut, tail_mut;

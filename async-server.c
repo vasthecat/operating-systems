@@ -33,14 +33,15 @@ enum command_t
     CMD_EXIT = 1,
     CMD_TASK,
     CMD_NO_TASKS,
-    CMD_TASKS_LIST_START,
-    CMD_TASKS_LIST_END,
 };
+
+struct handler_context_t;
 
 struct node_t
 {
     int socket_fd;
-    pthread_t thread_id;
+    pthread_t receiver_id, sender_id;
+    struct handler_context_t *handler_context;
 };
 
 struct set_t
@@ -112,6 +113,53 @@ set_destroy(struct set_t *set)
     free(set->data);
 }
 
+struct id_set_t
+{
+    size_t size, capacity;
+    long *data;
+
+    sem_t available;
+};
+
+static void
+id_set_init(struct id_set_t *set, long size)
+{
+    sem_init(&set->available, 0, size);
+    set->data = malloc(size * sizeof(long));
+    if (set->data == NULL)
+        handle_error("Couldn't allocate space for id_set_t");
+    for (int i = 0; i < size; ++i)
+    {
+        set->data[i] = i;
+    }
+    set->capacity = size;
+    set->size = size;
+}
+
+static long
+borrow_id(struct id_set_t *set)
+{
+    sem_wait(&set->available);
+    long id = set->data[0];
+    --set->size;
+    set->data[0] = set->data[set->size];
+    return id;
+}
+
+static void
+return_id(struct id_set_t *set, long id)
+{
+    sem_post(&set->available);
+    set->data[set->size] = id;
+    ++set->size;
+}
+
+static void
+id_set_destroy(struct id_set_t *set)
+{
+    free(set->data);
+}
+
 struct srv_context_t
 {
     volatile int tasks_running;
@@ -130,6 +178,25 @@ struct srv_context_t
 
     struct config_t *config;
 };
+
+struct handler_context_t
+{
+    int max_tasks;
+    int current_tasks;
+    struct task_t *tasks;
+    struct id_set_t id_set;
+    pthread_mutex_t id_set_mutex;
+
+    int client_sfd;
+    struct srv_context_t *srv_context;
+};
+
+static void
+handler_context_destroy(struct handler_context_t *context)
+{
+    free(context->tasks);
+    id_set_destroy(&context->id_set);
+}
 
 struct params_t
 {
@@ -165,6 +232,7 @@ close_client(int client_sfd)
 {
     int status;
 
+    fprintf(stderr, "Sending EXIT\n");
     status = send_tag(client_sfd, CMD_EXIT);
     if (status == -1) return -1;
 
@@ -177,78 +245,63 @@ close_client(int client_sfd)
     return 0;
 }
 
-static int
-send_tasks(const int client_sfd, const int max_tasks,
-           struct srv_context_t *context, struct task_t *tasks,
-           bool *task_active, int *current_tasks)
-{
-    int status;
-
-    status = send_tag(client_sfd, CMD_TASKS_LIST_START);
-    if (status == -1) return -1;
-
-    for (int i = 0; i < max_tasks; ++i)
-    {
-        if (!task_active[i])
-        {
-            queue_pop(&context->queue, &tasks[i]);
-
-            tasks[i].to = tasks[i].from;
-            tasks[i].from = 0;
-            tasks[i].id = i;
-
-            pthread_mutex_lock(&context->tasks_mutex);
-            --context->tasks_running;
-            pthread_mutex_unlock(&context->tasks_mutex);
-
-            status = send_message(client_sfd, CMD_TASK, &tasks[i], sizeof(struct task_t));
-            if (status == -1) return -1;
-
-            (*current_tasks)++;
-        }
-    }
-
-    status = send_tag(client_sfd, CMD_TASKS_LIST_END);
-    if (status == -1) return -1;
-
-    return 0;
-}
-
 static void *
-serve_client(void *arg)
+task_sender(void *arg)
 {
-    struct params_t *params = (struct params_t *) arg;
-    struct srv_context_t *context = (struct srv_context_t *) params->context;
-    int client_sfd = params->socket_fd;
-    pthread_mutex_unlock(&context->thread_started);
+    struct handler_context_t *context = (struct handler_context_t *) arg;
+    struct srv_context_t *srv_context = context->srv_context;
+    int client_sfd = context->client_sfd;
 
     int status;
-
-    int max_tasks;
-    status = recvall(client_sfd, &max_tasks, sizeof(max_tasks), 0);
-    if (status == -1) goto exit_label;
-
-    int current_tasks = 0;
-    struct task_t *tasks = alloca(max_tasks * sizeof(struct task_t));
-    bool *task_active = alloca(max_tasks * sizeof(bool));
-    memset(task_active, 0, max_tasks);
 
     while (true)
     {
-        if (context->tasks_running == 0 && current_tasks != 0)
+        if (srv_context->tasks_running == 0 && context->current_tasks != 0)
         {
-            printf("Sending NO_TASKS\n");
             status = send_tag(client_sfd, CMD_NO_TASKS);
+            fprintf(stderr, "No tasks left, exiting sender\n");
+            break;
         }
         else
         {
-            printf("Sending tasks, %i\n", context->tasks_running);
-            status = send_tasks(client_sfd, max_tasks, context, tasks, task_active, &current_tasks);
+            long id = borrow_id(&context->id_set);
+            struct task_t *task = &context->tasks[id];
+            queue_pop(&srv_context->queue, task);
+
+            task->to = task->from;
+            task->from = 0;
+            task->id = id;
+            task->correct = false;
+
+            pthread_mutex_lock(&srv_context->tasks_mutex);
+            --srv_context->tasks_running;
+            ++context->current_tasks;
+            pthread_mutex_unlock(&srv_context->tasks_mutex);
+
+            status = send_message(client_sfd, CMD_TASK, task, sizeof(*task));
+            if (status == -1) goto cleanup;
         }
+    }
 
-        if (status == -1) goto cleanup;
+    goto exit_label;
+cleanup:
+    // TODO: return all tasks to queue
 
-        printf("Receiving result\n");
+exit_label:
+    return NULL;
+}
+
+static void *
+task_receiver(void *arg)
+{
+    struct handler_context_t *context = (struct handler_context_t *) arg;
+    struct srv_context_t *srv_context = context->srv_context;
+    int client_sfd = context->client_sfd;
+
+    int status;
+
+    while (true)
+    {
         enum command_t tag;
         status = recvall(client_sfd, &tag, sizeof(tag), 0);
         if (status == -1) goto cleanup;
@@ -258,23 +311,21 @@ serve_client(void *arg)
         struct task_t task;
         status = recvall(client_sfd, &task, sizeof(task), 0);
         if (status == -1) goto cleanup;
-        --current_tasks;
+        --context->current_tasks;
+        return_id(&context->id_set, task.id);
 
+        /*
         printf("Got result:\n");
         printf("  password = '%s'\n", task.password);
         printf("  id = %li\n", task.id);
         printf("  correct = %i\n", task.correct);
+        */
 
         if (task.correct)
         {
-            memcpy(context->password, task.password, sizeof(task.password));
-            context->found = true;
-            context->done = true;
-        }
-
-        if ((context->tasks_running == 0 && current_tasks == 0) || context->found)
-        {
-            /* pthread_cond_signal(&context->tasks_cond); */
+            memcpy(srv_context->password, task.password, sizeof(task.password));
+            srv_context->found = true;
+            srv_context->done = true;
             break;
         }
     }
@@ -284,15 +335,14 @@ cleanup:
     // TODO: return all tasks to queue
 
 exit_label:
-    pthread_mutex_lock(&context->set_mutex);
-    set_remove_sock(&context->set, client_sfd);
+    pthread_mutex_lock(&srv_context->set_mutex);
+    set_remove_sock(&srv_context->set, client_sfd);
     close_client(client_sfd);
-    pthread_mutex_unlock(&context->set_mutex);
+    pthread_mutex_unlock(&srv_context->set_mutex);
 
-    printf("Exiting: %i %i %i\n", context->tasks_running, current_tasks, context->found);
-    if ((context->tasks_running == 0 && current_tasks == 0) || context->found)
+    if (srv_context->tasks_running == 0 || srv_context->found)
     {
-        pthread_cond_signal(&context->tasks_cond);
+        pthread_cond_signal(&srv_context->tasks_cond);
     }
 
     return NULL;
@@ -317,15 +367,25 @@ srv_server(void *arg)
     struct params_t *params = (struct params_t *) arg;
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     int server_sfd = params->socket_fd;
+    int status;
 
     while (true)
     {
         // Printing to stderr to be able to check output in tests
         fprintf(stderr, "Waiting for new connections...\n");
-        int client_socket = accept(server_sfd, NULL, NULL);
-        if (client_socket == -1)
+        int client_sfd = accept(server_sfd, NULL, NULL);
+        if (client_sfd == -1)
             handle_error("accept");
         fprintf(stderr, "Got new connection...\n");
+
+        int max_tasks;
+        status = recvall(client_sfd, &max_tasks, sizeof(max_tasks), 0);
+        if (status == -1)
+        {
+            close_client(client_sfd);
+            continue;
+        }
+        max_tasks *= 2;
 
         pthread_mutex_lock(&context->set_mutex);
         pthread_cleanup_push(
@@ -334,18 +394,38 @@ srv_server(void *arg)
         );
 
         struct node_t *node = set_take_last(&context->set);
-        node->socket_fd = client_socket;
-        int status = pthread_create(
-            &node->thread_id, NULL, serve_client,
-            &(struct params_t) { context, client_socket }
+        node->socket_fd = client_sfd;
+
+        node->handler_context = malloc(sizeof(*node->handler_context));
+        node->handler_context->max_tasks = max_tasks;
+        node->handler_context->current_tasks = 0;
+        node->handler_context->tasks =
+            malloc(max_tasks * sizeof(*node->handler_context->tasks));
+        id_set_init(&node->handler_context->id_set, max_tasks);
+        pthread_mutex_init(&node->handler_context->id_set_mutex, NULL);
+        node->handler_context->client_sfd = client_sfd;
+        node->handler_context->srv_context = context;
+
+        status = pthread_create(
+            &node->sender_id, NULL, task_sender, node->handler_context
         );
-        if (status == 0)
+        if (status != 0)
         {
-            pthread_mutex_lock(&context->thread_started);
+            perror("Couldn't start sender thread");
+            handler_context_destroy(node->handler_context);
+            free(node->handler_context);
+            close_client(client_sfd);
         }
-        else
+
+        status = pthread_create(
+            &node->receiver_id, NULL, task_receiver, node->handler_context
+        );
+        if (status != 0)
         {
-            close_client(client_socket);
+            perror("Couldn't start receiver thread");
+            handler_context_destroy(node->handler_context);
+            free(node->handler_context);
+            close_client(client_sfd);
         }
 
         pthread_cleanup_pop(!0);
@@ -405,9 +485,14 @@ run_async_server(struct task_t *task, struct config_t *config)
     pthread_mutex_lock(&context.set_mutex);
     for (int i = 0; i < context.set.size; ++i)
     {
-        pthread_t thread = context.set.data[i].thread_id;
-        pthread_cancel(thread);
-        pthread_join(thread, NULL);
+        pthread_t receiver_thread = context.set.data[i].receiver_id;
+        pthread_cancel(receiver_thread);
+        pthread_join(receiver_thread, NULL);
+
+        pthread_t sender_thread = context.set.data[i].sender_id;
+        pthread_cancel(sender_thread);
+        pthread_join(sender_thread, NULL);
+
         close_client(context.set.data[i].socket_fd);
     }
     pthread_mutex_unlock(&context.set_mutex);
@@ -422,18 +507,22 @@ run_async_server(struct task_t *task, struct config_t *config)
     return context.found;
 }
 
+/***************
+ * CLIENT CODE *
+ ***************/
+
 struct cl_context_t
 {
     struct queue_t queue;
     struct queue_t queue_done;
 
-    pthread_mutex_t done_mutex;
-    pthread_cond_t task_done_cond;
-
     volatile int tasks_done;
     volatile int tasks_running;
     pthread_mutex_t tasks_mutex;
 
+    volatile bool receiver_done;
+
+    int server_sfd;
     struct config_t *config;
 };
 
@@ -452,6 +541,8 @@ read_message(int socket_fd, void *data)
     return 0;
 }
 
+pid_t syscall(int);
+
 static void *
 cl_worker(void *arg)
 {
@@ -467,54 +558,99 @@ cl_worker(void *arg)
         struct task_t task;
         queue_pop(&context->queue, &task);
 
-        bool found = process_task(&task, config, &st_context, st_password_handler);
+        bool found = process_task(&task, config,
+                                  &st_context, st_password_handler);
         task.correct = found;
-        queue_push(&context->queue_done, &task);
 
         pthread_mutex_lock(&context->tasks_mutex);
         --context->tasks_running;
         ++context->tasks_done;
         pthread_mutex_unlock(&context->tasks_mutex);
 
-        pthread_cond_signal(&context->task_done_cond);
+        queue_push(&context->queue_done, &task);
     }
     return NULL;
 }
 
-static int
-read_task_list(const int socket_fd, struct cl_context_t *context)
+static void *
+cl_task_receiver(void *arg)
 {
-    int status;
+    struct cl_context_t *context = arg;
+    int server_sfd = context->server_sfd;
 
+    int status;
     while (true)
     {
         enum command_t tag;
-        status = recvall(socket_fd, &tag, sizeof(tag), 0);
-        if (status == -1) return -1;
+        status = recvall(server_sfd, &tag, sizeof(tag), 0);
+        if (status == -1) break;
 
-        if (tag == CMD_TASKS_LIST_END)
+        switch (tag)
         {
-            break;
-        }
-        else
-        {
+        case CMD_TASK:
             struct task_t task;
-            status = read_message(socket_fd, &task);
-            if (status == -1) return -1;
-            queue_push(&context->queue, &task);
+            status = read_message(server_sfd, &task);
+            if (status == -1) goto exit_label;
 
             pthread_mutex_lock(&context->tasks_mutex);
+            queue_push(&context->queue, &task);
             ++context->tasks_running;
             pthread_mutex_unlock(&context->tasks_mutex);
+            break;
+        case CMD_NO_TASKS:
+            context->receiver_done = true;
+            break;
+        case CMD_EXIT:
+            fprintf(stderr, "Received EXIT\n");
+            goto exit_label;
+            break;
+        default:
+            fprintf(stderr, "This shouldn't happen\n");
+            goto exit_label;
+            break;
         }
     }
-    return 0;
+
+exit_label:
+    return NULL;
+}
+
+static void *
+cl_task_sender(void *arg)
+{
+    struct cl_context_t *context = arg;
+    int server_sfd = context->server_sfd;
+
+    int status;
+    while (true)
+    {
+        if (context->receiver_done &&
+            context->tasks_running == 0 &&
+            context->tasks_done == 0)
+        {
+            status = send_tag(server_sfd, CMD_NO_TASKS);
+            break;
+        }
+
+        struct task_t task;
+        queue_pop(&context->queue_done, &task);
+        status = send_tag(server_sfd, CMD_TASK);
+        if (status == -1) break;
+        status = sendall(server_sfd, &task, sizeof(task), 0);
+        if (status == -1) break;
+
+        pthread_mutex_lock(&context->tasks_mutex);
+        --context->tasks_done;
+        pthread_mutex_unlock(&context->tasks_mutex);
+    }
+
+    return NULL;
 }
 
 bool
 run_async_client(struct task_t *task, struct config_t *config)
 {
-    int network_socket = socket(AF_INET, SOCK_STREAM, 0);
+    int server_sfd = socket(AF_INET, SOCK_STREAM, 0);
 
     struct sockaddr_in server_address;
     server_address.sin_family = AF_INET;
@@ -524,99 +660,57 @@ run_async_client(struct task_t *task, struct config_t *config)
     inet_pton(AF_INET, config->address, &address);
     server_address.sin_addr.s_addr = address.s_addr;
 
-    if (connect(network_socket,
+    if (connect(server_sfd,
                 (struct sockaddr *) &server_address,
                 sizeof(server_address)))
     {
         handle_error("connection");
     }
-    printf("Connected to server\n");
+    fprintf(stderr, "Connected to server\n");
 
     struct cl_context_t context;
     queue_init(&context.queue);
     queue_init(&context.queue_done);
-    pthread_mutex_init(&context.done_mutex, NULL);
-    pthread_cond_init(&context.task_done_cond, NULL);
     context.tasks_running = 0;
     context.tasks_done = 0;
     pthread_mutex_init(&context.tasks_mutex, NULL);
+    context.receiver_done = false;
+    context.server_sfd = server_sfd;
     context.config = config;
 
-    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN) - 1;
-    cpu_count = 1;
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     pthread_t threads[cpu_count];
+
+    int status = sendall(server_sfd, &cpu_count, sizeof(cpu_count), 0);
+    if (status == -1) goto exit_label;
+
     for (int i = 0; i < cpu_count; ++i)
     {
         pthread_create(&threads[i], NULL, cl_worker, (void *) &context);
     }
 
-    int status;
-    status = sendall(network_socket, &cpu_count, sizeof(cpu_count), 0);
-    if (status == -1) goto exit_label;
+    pthread_t receiver_thread;
+    pthread_create(&receiver_thread, NULL, cl_task_receiver, (void *) &context);
 
-    bool found = false;
-    while (!found)
+    pthread_t sender_thread;
+    pthread_create(&sender_thread, NULL, cl_task_sender, (void *) &context);
+
+    pthread_join(receiver_thread, NULL);
+
+    for (int i = 0; i < cpu_count; ++i)
     {
-        printf("Waiting for new command\n");
-        enum command_t tag;
-        status = recvall(network_socket, &tag, sizeof(tag), 0);
-        if (status == -1) break;
-
-        switch (tag)
-        {
-        case CMD_TASKS_LIST_START:
-            read_task_list(network_socket, &context);
-            break;
-        case CMD_NO_TASKS:
-            printf("Received NO_TASKS\n");
-            break;
-        case CMD_EXIT:
-            printf("Received EXIT\n");
-            goto exit_label;
-            break;
-        default:
-            fprintf(stderr, "This shouldn't happen\n");
-            goto exit_label;
-            break;
-        }
-
-        if (context.tasks_running == 0 && context.tasks_done == 0)
-        {
-            printf("Sending NO_TASKS\n");
-            status = send_tag(network_socket, CMD_NO_TASKS);
-            if (status == -1) break;
-            continue;
-        }
-
-        if (context.tasks_running != 0)
-        {
-            printf("Waiting for task to complete, %i\n", context.tasks_running);
-            pthread_mutex_lock(&context.done_mutex);
-            pthread_cond_wait(&context.task_done_cond, &context.done_mutex);
-            pthread_mutex_unlock(&context.done_mutex);
-        }
-
-        printf("Some task is done, sending to server\n");
-        status = send_tag(network_socket, CMD_TASK);
-        if (status == -1) break;
-        struct task_t task;
-        queue_pop(&context.queue_done, &task);
-        status = sendall(network_socket, &task, sizeof(task), 0);
-        if (status == -1) break;
-
-        pthread_mutex_lock(&context.tasks_mutex);
-        --context.tasks_done;
-        pthread_mutex_unlock(&context.tasks_mutex);
-        printf("%i tasks left\n", context.tasks_done);
+        pthread_cancel(threads[i]);
+        pthread_join(threads[i], NULL);
     }
+
+    pthread_cancel(sender_thread);
+    pthread_join(sender_thread, NULL);
 
 exit_label:
     queue_destroy(&context.queue);
     queue_destroy(&context.queue_done);
-    pthread_mutex_destroy(&context.done_mutex);
-    pthread_cond_destroy(&context.task_done_cond);
     pthread_mutex_destroy(&context.tasks_mutex);
-    close(network_socket);
+    close(server_sfd);
 
-    return found;
+    return false;
 }
