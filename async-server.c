@@ -579,6 +579,7 @@ cl_task_receiver(void *arg)
     int server_sfd = context->server_sfd;
 
     int status;
+    struct task_t task;
     while (true)
     {
         enum command_t tag;
@@ -588,7 +589,6 @@ cl_task_receiver(void *arg)
         switch (tag)
         {
         case CMD_TASK:
-            struct task_t task;
             status = read_message(server_sfd, &task);
             if (status == -1) goto exit_label;
 
