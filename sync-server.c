@@ -51,7 +51,7 @@ set_init(struct set_t *set)
 {
     set->size = 0;
     set->capacity = 2;
-    set->data = calloc(set->capacity, sizeof(struct node_t));
+    set->data = calloc(set->capacity, sizeof(*set->data));
     if (set->data == NULL)
         handle_error("Couldn't allocate space for set_t");
 }
@@ -80,7 +80,7 @@ set_take_last(struct set_t *set)
     if (set->size == set->capacity)
     {
         set->capacity *= 2;
-        set->data = realloc(set->data, set->capacity);
+        set->data = realloc(set->data, set->capacity * sizeof(*set->data));
         if (set->data == NULL)
             handle_error("Couldn't reallocate space for set_t");
     }
