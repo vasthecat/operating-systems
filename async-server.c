@@ -115,8 +115,8 @@ set_destroy(struct set_t *set)
 
 struct id_set_t
 {
-    size_t size, capacity;
-    long *data;
+    size_t size, borrowed_size, capacity;
+    long *data, *borrowed_data;
 
     sem_t available;
 };
@@ -125,15 +125,22 @@ static void
 id_set_init(struct id_set_t *set, long size)
 {
     sem_init(&set->available, 0, size);
-    set->data = malloc(size * sizeof(long));
+
+    set->data = calloc(size, sizeof(*set->data));
     if (set->data == NULL)
-        handle_error("Couldn't allocate space for id_set_t");
+        handle_error("Couldn't allocate space for id_set_t (free ids)");
+
+    set->borrowed_data = calloc(size, sizeof(*set->borrowed_data));
+    if (set->borrowed_data == NULL)
+        handle_error("Couldn't allocate space for id_set_t (borrowed ids)");
+
     for (int i = 0; i < size; ++i)
     {
         set->data[i] = i;
     }
     set->capacity = size;
     set->size = size;
+    set->borrowed_size = 0;
 }
 
 static long
@@ -143,15 +150,28 @@ borrow_id(struct id_set_t *set)
     long id = set->data[0];
     --set->size;
     set->data[0] = set->data[set->size];
+
+    set->borrowed_data[set->borrowed_size] = id;
+    ++set->borrowed_size;
     return id;
 }
 
 static void
 return_id(struct id_set_t *set, long id)
 {
-    sem_post(&set->available);
     set->data[set->size] = id;
     ++set->size;
+
+    if (set->borrowed_size > 1)
+    {
+        for (int i = 0; i < set->borrowed_size; ++i)
+        {
+            if (set->borrowed_data[i] == id)
+                set->borrowed_data[i] = set->borrowed_data[set->borrowed_size - 1];
+        }
+    }
+    --set->borrowed_size;
+    sem_post(&set->available);
 }
 
 static void
@@ -285,7 +305,8 @@ task_sender(void *arg)
 
     goto exit_label;
 cleanup:
-    // TODO: return all tasks to queue
+    // NOTE: All tasks should be returned in task_receiver.
+    // This label and commend will be removed when this workflow is tested.
 
 exit_label:
     return NULL;
@@ -332,7 +353,14 @@ task_receiver(void *arg)
 
     goto exit_label;
 cleanup:
-    // TODO: return all tasks to queue
+    // Return all tasks to queue
+    for (int i = 0; i < context->id_set.borrowed_size; ++i)
+    {
+        long id = context->id_set.borrowed_data[i];
+        struct task_t *task = &context->tasks[id];
+        queue_push(&srv_context->queue, task);
+        return_id(&context->id_set, id);
+    }
 
 exit_label:
     pthread_mutex_lock(&srv_context->set_mutex);
