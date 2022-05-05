@@ -208,21 +208,26 @@ struct params_t
 static int
 send_tag(int socket_fd, enum command_t tag)
 {
-    return sendall(socket_fd, &tag, sizeof(tag), 0);
+    struct iovec vec[1];
+    vec[0].iov_base = &tag;
+    vec[0].iov_len = sizeof(tag);
+    return sendall_vec(socket_fd, vec, 1);
 }
 
 static int
 send_message(int socket_fd, enum command_t tag, void *data, int length)
 {
-    int status;
+    struct iovec vec[3];
+    vec[0].iov_base = &tag;
+    vec[0].iov_len = sizeof(tag);
 
-    status = send_tag(socket_fd, tag);
-    if (status == -1) return -1;
+    vec[1].iov_base = &length;
+    vec[1].iov_len = sizeof(length);
 
-    status = sendall(socket_fd, &length, sizeof(length), 0);
-    if (status == -1) return -1;
+    vec[2].iov_base = data;
+    vec[2].iov_len = length;
 
-    status = sendall(socket_fd, data, length, 0);
+    int status = sendall_vec(socket_fd, vec, sizeof(vec) / sizeof(vec[0]));
     if (status == -1) return -1;
 
     return 0;
@@ -306,6 +311,10 @@ task_receiver(void *arg)
     {
         enum command_t tag;
         status = recvall(client_sfd, &tag, sizeof(tag), 0);
+        if (status == -1) goto cleanup;
+
+        int length;
+        status = recvall(client_sfd, &length, sizeof(length), 0);
         if (status == -1) goto cleanup;
 
         struct task_t task;
@@ -637,9 +646,8 @@ cl_task_sender(void *arg)
 
         struct task_t task;
         queue_pop(&context->queue_done, &task);
-        status = send_tag(server_sfd, CMD_TASK);
-        if (status == -1) break;
-        status = sendall(server_sfd, &task, sizeof(task), 0);
+
+        status = send_message(server_sfd, CMD_TASK, &task, sizeof(task));
         if (status == -1) break;
 
         pthread_mutex_lock(&context->tasks_mutex);

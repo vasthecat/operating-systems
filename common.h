@@ -52,4 +52,12 @@ sendall(const int socket_fd, const void *data, const int size, const int flags);
 int
 recvall(const int socket_fd, void *data, const int size, const int flags);
 
+struct iovec;
+
+int
+sendall_vec(int socket_fd, struct iovec *iov, int iovcnt);
+
+int
+recvall_vec(int socket_fd, struct iovec *iov, int iovcnt);
+
 #endif // COMMON_H

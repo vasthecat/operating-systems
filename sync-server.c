@@ -182,6 +182,9 @@ send_task(const int client_sfd, struct task_t *task)
     status = recvall(client_sfd, &tag, sizeof(tag), 0);
     if (status == -1) return -1;
 
+    status = recvall(client_sfd, &length, sizeof(length), 0);
+    if (status == -1) return -1;
+
     status = recvall(client_sfd, task, sizeof(*task), 0);
     if (status == -1) return -1;
 
@@ -366,23 +369,32 @@ run_server(struct task_t *task, struct config_t *config)
 }
 
 static int
-send_tag(int socket_fd, enum command_t tag)
+send_message(int socket_fd, enum command_t tag, void *data, int length)
 {
-    return sendall(socket_fd, &tag, sizeof(tag), 0);
+    struct iovec vec[3];
+    vec[0].iov_base = &tag;
+    vec[0].iov_len = sizeof(tag);
+
+    vec[1].iov_base = &length;
+    vec[1].iov_len = sizeof(length);
+
+    vec[2].iov_base = data;
+    vec[2].iov_len = length;
+
+    int status = sendall_vec(socket_fd, vec, sizeof(vec) / sizeof(vec[0]));
+    if (status == -1) return -1;
+
+    return 0;
 }
 
 static int
 cl_process_task(int network_socket, struct task_t *task,
                 struct st_context_t *context, struct config_t *config)
 {
-    int status;
-
     bool found = process_task(task, config, context, st_password_handler);
     task->correct = found;
 
-    status = send_tag(network_socket, CMD_TASK);
-    if (status == -1) return -1;
-    status = sendall(network_socket, task, sizeof(*task), 0);
+    int status = send_message(network_socket, CMD_TASK, task, sizeof(*task));
     if (status == -1) return -1;
 
     return 0;
