@@ -196,6 +196,7 @@ handler_context_destroy(struct handler_context_t *context)
 {
     free(context->tasks);
     id_set_destroy(&context->id_set);
+    pthread_mutex_destroy(&context->id_set_mutex);
 }
 
 struct params_t
@@ -346,6 +347,7 @@ exit_label:
     set_remove_sock(&srv_context->set, client_sfd);
     close_client(client_sfd);
     pthread_mutex_unlock(&srv_context->set_mutex);
+    handler_context_destroy(context);
 
     if (srv_context->tasks_running == 0 || srv_context->found)
     {
@@ -546,8 +548,6 @@ read_message(int socket_fd, void *data)
     return 0;
 }
 
-pid_t syscall(int);
-
 static void *
 cl_worker(void *arg)
 {
@@ -700,14 +700,14 @@ run_async_client(struct task_t *task, struct config_t *config)
 
     pthread_join(receiver_thread, NULL);
 
+    pthread_cancel(sender_thread);
+    pthread_join(sender_thread, NULL);
+
     for (int i = 0; i < cpu_count; ++i)
     {
         pthread_cancel(threads[i]);
         pthread_join(threads[i], NULL);
     }
-
-    pthread_cancel(sender_thread);
-    pthread_join(sender_thread, NULL);
 
 exit_label:
     queue_destroy(&context.queue);
