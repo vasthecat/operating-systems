@@ -114,8 +114,8 @@ set_destroy(struct set_t *set)
 
 struct id_set_t
 {
-    size_t size, borrowed_size, capacity;
-    long *data, *borrowed_data;
+    size_t size, capacity;
+    long *data;
 
     sem_t available;
 };
@@ -129,17 +129,12 @@ id_set_init(struct id_set_t *set, long size)
     if (set->data == NULL)
         handle_error("Couldn't allocate space for id_set_t (free ids)");
 
-    set->borrowed_data = calloc(size, sizeof(*set->borrowed_data));
-    if (set->borrowed_data == NULL)
-        handle_error("Couldn't allocate space for id_set_t (borrowed ids)");
-
     for (int i = 0; i < size; ++i)
     {
         set->data[i] = i;
     }
     set->capacity = size;
     set->size = size;
-    set->borrowed_size = 0;
 }
 
 static long
@@ -149,9 +144,6 @@ borrow_id(struct id_set_t *set)
     long id = set->data[0];
     --set->size;
     set->data[0] = set->data[set->size];
-
-    set->borrowed_data[set->borrowed_size] = id;
-    ++set->borrowed_size;
     return id;
 }
 
@@ -160,16 +152,6 @@ return_id(struct id_set_t *set, long id)
 {
     set->data[set->size] = id;
     ++set->size;
-
-    if (set->borrowed_size > 1)
-    {
-        for (int i = 0; i < set->borrowed_size; ++i)
-        {
-            if (set->borrowed_data[i] == id)
-                set->borrowed_data[i] = set->borrowed_data[set->borrowed_size - 1];
-        }
-    }
-    --set->borrowed_size;
     sem_post(&set->available);
 }
 
@@ -289,6 +271,7 @@ task_sender(void *arg)
             task->from = 0;
             task->id = id;
             task->correct = false;
+            task->done = false;
 
             pthread_mutex_lock(&srv_context->tasks_mutex);
             --srv_context->tasks_running;
@@ -329,6 +312,7 @@ task_receiver(void *arg)
         if (status == -1) goto cleanup;
         --context->current_tasks;
         return_id(&context->id_set, task.id);
+        context->tasks[task.id].done = true;
 
         if (task.correct)
         {
@@ -346,12 +330,15 @@ task_receiver(void *arg)
     goto exit_label;
 cleanup:
     // Return all tasks to queue
-    for (int i = 0; i < context->id_set.borrowed_size; ++i)
+    for (int i = 0; i < context->max_tasks; ++i)
     {
-        long id = context->id_set.borrowed_data[i];
-        struct task_t *task = &context->tasks[id];
-        queue_push(&srv_context->queue, task);
-        return_id(&context->id_set, id);
+        struct task_t *task = &context->tasks[i];
+        if (!task->done)
+        {
+            task->from = task->to;
+            task->to = srv_context->config->length;
+            queue_push(&srv_context->queue, task);
+        }
     }
 
 exit_label:
