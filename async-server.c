@@ -32,7 +32,6 @@ enum command_t
 {
     CMD_EXIT = 1,
     CMD_TASK,
-    CMD_NO_TASKS,
 };
 
 struct handler_context_t;
@@ -192,7 +191,6 @@ struct srv_context_t
     password_t password;
     char *hash;
     volatile bool found;
-    volatile bool done;
 
     pthread_mutex_t thread_started;
 
@@ -276,9 +274,8 @@ task_sender(void *arg)
 
     while (true)
     {
-        if (srv_context->tasks_running == 0 && context->current_tasks != 0)
+        if (srv_context->tasks_running == 0)
         {
-            status = send_tag(client_sfd, CMD_NO_TASKS);
             fprintf(stderr, "No tasks left, exiting sender\n");
             break;
         }
@@ -306,7 +303,7 @@ task_sender(void *arg)
     goto exit_label;
 cleanup:
     // NOTE: All tasks should be returned in task_receiver.
-    // This label and commend will be removed when this workflow is tested.
+    // This label and comment will be removed when this workflow is tested.
 
 exit_label:
     return NULL;
@@ -327,8 +324,6 @@ task_receiver(void *arg)
         status = recvall(client_sfd, &tag, sizeof(tag), 0);
         if (status == -1) goto cleanup;
 
-        if (tag == CMD_NO_TASKS) break;
-
         struct task_t task;
         status = recvall(client_sfd, &task, sizeof(task), 0);
         if (status == -1) goto cleanup;
@@ -346,7 +341,11 @@ task_receiver(void *arg)
         {
             memcpy(srv_context->password, task.password, sizeof(task.password));
             srv_context->found = true;
-            srv_context->done = true;
+            break;
+        }
+
+        if (context->current_tasks == 0 && srv_context->tasks_running == 0)
+        {
             break;
         }
     }
@@ -475,7 +474,6 @@ run_async_server(struct task_t *task, struct config_t *config)
     pthread_cond_init(&context.tasks_cond, NULL);
     context.password[0] = 0;
     context.config = config;
-    context.done = false;
     context.found = false;
     queue_init(&context.queue);
     set_init(&context.set);
@@ -502,7 +500,6 @@ run_async_server(struct task_t *task, struct config_t *config)
     task->from = 2;
     task->to = config->length;
     process_task(task, config, &context, srv_password_handler);
-    context.done = true;
 
     pthread_mutex_lock(&context.tasks_mutex);
     pthread_cond_wait(&context.tasks_cond, &context.tasks_mutex);
@@ -548,7 +545,7 @@ struct cl_context_t
     volatile int tasks_running;
     pthread_mutex_t tasks_mutex;
 
-    volatile bool receiver_done;
+    volatile bool server_done;
 
     int server_sfd;
     struct config_t *config;
@@ -625,11 +622,9 @@ cl_task_receiver(void *arg)
             ++context->tasks_running;
             pthread_mutex_unlock(&context->tasks_mutex);
             break;
-        case CMD_NO_TASKS:
-            context->receiver_done = true;
-            break;
         case CMD_EXIT:
             fprintf(stderr, "Received EXIT\n");
+            context->server_done = true;
             goto exit_label;
             break;
         default:
@@ -652,11 +647,11 @@ cl_task_sender(void *arg)
     int status;
     while (true)
     {
-        if (context->receiver_done &&
+        if (context->server_done &&
             context->tasks_running == 0 &&
             context->tasks_done == 0)
         {
-            status = send_tag(server_sfd, CMD_NO_TASKS);
+            printf("Exiting sender\n");
             break;
         }
 
@@ -702,7 +697,7 @@ run_async_client(struct task_t *task, struct config_t *config)
     context.tasks_running = 0;
     context.tasks_done = 0;
     pthread_mutex_init(&context.tasks_mutex, NULL);
-    context.receiver_done = false;
+    context.server_done = false;
     context.server_sfd = server_sfd;
     context.config = config;
 
