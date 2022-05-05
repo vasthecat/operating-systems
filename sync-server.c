@@ -159,7 +159,7 @@ close_client(int client_sfd)
 }
 
 static int
-send_task(const int client_sfd, struct task_t *task, bool *result)
+send_task(const int client_sfd, struct task_t *task)
 {
     int status;
 
@@ -177,17 +177,14 @@ send_task(const int client_sfd, struct task_t *task, bool *result)
     status = sendall(client_sfd, task, length, 0);
     if (status == -1) return -1;
 
-    int size;
-    status = recvall(client_sfd, &size, sizeof(size), 0);
+    // Read response from client
+    enum command_t tag;
+    status = recvall(client_sfd, &tag, sizeof(tag), 0);
     if (status == -1) return -1;
 
-    if (size != 0)
-    {
-        status = recv(client_sfd, task->password, size, 0);
-        if (status == -1) return -1;
-    }
+    status = recvall(client_sfd, task, sizeof(*task), 0);
+    if (status == -1) return -1;
 
-    *result = (size != 0);
     return 0;
 }
 
@@ -206,14 +203,13 @@ serve_client(void *arg)
 
         task.to = task.from;
         task.from = 0;
-        bool found = false;
-        int status = send_task(client_sfd, &task, &found);
+        int status = send_task(client_sfd, &task);
         if (status == -1)
         {
             queue_push(&context->queue, &task);
             break;
         }
-        if (found)
+        if (task.correct)
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
@@ -256,6 +252,7 @@ srv_server(void *arg)
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     int server_sfd = params->socket_fd;
 
+    int status;
     while (true)
     {
         // Printing to stderr to be able to check output in tests
@@ -265,6 +262,14 @@ srv_server(void *arg)
             handle_error("accept");
         fprintf(stderr, "Got new connection...\n");
 
+        int max_tasks;
+        status = recvall(client_socket, &max_tasks, sizeof(max_tasks), 0);
+        if (status == -1)
+        {
+            close_client(client_socket);
+            continue;
+        }
+
         pthread_mutex_lock(&context->set_mutex);
         pthread_cleanup_push(
             (void (*) (void*)) pthread_mutex_unlock,
@@ -273,7 +278,7 @@ srv_server(void *arg)
 
         struct node_t *node = set_take_last(&context->set);
         node->socket_fd = client_socket;
-        int status = pthread_create(
+        status = pthread_create(
             &node->thread_id, NULL, serve_client,
             &(struct params_t) { context, client_socket }
         );
@@ -361,26 +366,25 @@ run_server(struct task_t *task, struct config_t *config)
 }
 
 static int
+send_tag(int socket_fd, enum command_t tag)
+{
+    return sendall(socket_fd, &tag, sizeof(tag), 0);
+}
+
+static int
 cl_process_task(int network_socket, struct task_t *task,
                 struct st_context_t *context, struct config_t *config)
 {
     int status;
 
     bool found = process_task(task, config, context, st_password_handler);
-    if (found)
-    {
-        int msg = (int) sizeof(task->password);
-        status = sendall(network_socket, &msg, sizeof(int), 0);
-        if (status == -1) return -1;
-        status = sendall(network_socket, task->password, msg, 0);
-        if (status == -1) return -1;
-    }
-    else
-    {
-        int msg = 0;
-        status = sendall(network_socket, &msg, sizeof(int), 0);
-        if (status == -1) return -1;
-    }
+    task->correct = found;
+
+    status = send_tag(network_socket, CMD_TASK);
+    if (status == -1) return -1;
+    status = sendall(network_socket, task, sizeof(*task), 0);
+    if (status == -1) return -1;
+
     return 0;
 }
 
@@ -409,8 +413,11 @@ run_client(struct task_t *task, struct config_t *config)
     st_context.hash = config->hash;
     st_context.cd.initialized = 0;
 
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    int status = sendall(network_socket, &cpu_count, sizeof(cpu_count), 0);
+    if (status == -1) goto exit_label;
+
     bool found = false;
-    int status;
     while (!found)
     {
         enum command_t tag;
@@ -418,17 +425,19 @@ run_client(struct task_t *task, struct config_t *config)
         if (status == -1) break;
 
         int length;
-        status = recvall(network_socket, &length, sizeof(length), 0);
-        if (status == -1) break;
-
         switch (tag)
         {
         case CMD_EXIT:
             goto exit_label;
             break;
         case CMD_TASK:
+            status = recvall(network_socket, &length, sizeof(length), 0);
+            if (status == -1) goto exit_label;
+
             status = recvall(network_socket, task, length, 0);
             if (status == -1) goto exit_label;
+
+            printf("Got task\n");
 
             status = cl_process_task(network_socket, task, &st_context, config);
             if (status == -1) goto exit_label;

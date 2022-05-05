@@ -330,13 +330,6 @@ task_receiver(void *arg)
         --context->current_tasks;
         return_id(&context->id_set, task.id);
 
-        /*
-        printf("Got result:\n");
-        printf("  password = '%s'\n", task.password);
-        printf("  id = %li\n", task.id);
-        printf("  correct = %i\n", task.correct);
-        */
-
         if (task.correct)
         {
             memcpy(srv_context->password, task.password, sizeof(task.password));
