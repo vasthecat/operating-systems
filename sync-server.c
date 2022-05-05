@@ -437,8 +437,6 @@ run_client(struct task_t *task, struct config_t *config)
             status = recvall(network_socket, task, length, 0);
             if (status == -1) goto exit_label;
 
-            printf("Got task\n");
-
             status = cl_process_task(network_socket, task, &st_context, config);
             if (status == -1) goto exit_label;
 

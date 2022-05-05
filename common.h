@@ -12,6 +12,7 @@ struct task_t
     int from, to;
     long id;
     bool correct;
+    bool done;
 };
 
 enum brute_mode_t
