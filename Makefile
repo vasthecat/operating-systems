@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -g -std=c99
+CFLAGS=-Wall -g -std=c99 -D_XOPEN_SOURCE -D_GNU_SOURCE
 LIBS=-lcrypt -lpthread
 DEPS=
 
