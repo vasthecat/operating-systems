@@ -9,6 +9,7 @@
 #include <string.h>
 #include <alloca.h>
 #include <unistd.h>
+#include <stdio.h>
 
 struct gn_context_t
 {
@@ -78,6 +79,19 @@ gn_worker(void *arg)
 bool
 generator(struct task_t *task, struct config_t *config)
 {
+#ifdef __APPLE__
+    switch (config->brute_mode)
+    {
+    case M_RECURSIVE:
+    case M_REC_ITERATOR:
+        printf("Recursive generator mode is not supported on this platform\n");
+        exit(EXIT_FAILURE);
+        break;
+    default:
+        break;
+    }
+#endif
+
     struct gn_context_t *context = NULL;
 
     task->from = 2;
