@@ -5,6 +5,15 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 
+// Apple compatibility
+#ifndef TEMP_FAILURE_RETRY
+#define TEMP_FAILURE_RETRY(expr) \
+  ({ long int _res; \
+     do _res = (long int) (expr); \
+     while (_res == -1L && errno == EINTR); \
+     _res; })
+#endif
+
 int
 sendall(const int socket_fd, const void *data, const int size, const int flags)
 {
