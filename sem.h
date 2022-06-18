@@ -1,6 +1,10 @@
 #ifndef SEM_H
 #define SEM_H
 
+#ifndef __APPLE__
+#include <semaphore.h>
+#else
+
 #include <pthread.h>
 
 typedef struct
@@ -48,5 +52,7 @@ sem_close(sem_t *sem)
     pthread_mutex_destroy(&sem->value_mutex);
     pthread_cond_destroy(&sem->sem_cond);
 }
+
+#endif // __APPLE__
 
 #endif // SEM_H

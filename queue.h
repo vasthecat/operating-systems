@@ -3,12 +3,7 @@
 
 #include "common.h"
 
-#ifdef __APPLE__
 #include "sem.h"
-#else
-#include <semaphore.h>
-#endif
-
 #include <pthread.h>
 
 struct queue_t

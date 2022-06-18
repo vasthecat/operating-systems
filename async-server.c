@@ -18,11 +18,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#ifdef __APPLE__
 #include "sem.h"
-#else
-#include <semaphore.h>
-#endif
 
 #define MAX_CLIENTS 50
 #define handle_error(msg) \
@@ -174,8 +170,6 @@ struct srv_context_t
     char *hash;
     volatile bool found;
 
-    pthread_mutex_t thread_started;
-
     struct config_t *config;
 };
 
@@ -265,11 +259,14 @@ task_sender(void *arg)
         if (srv_context->tasks_running == 0)
         {
             fprintf(stderr, "No tasks left, exiting sender\n");
+            fprintf(stderr, "Clients running: %li\n", srv_context->set.size);
             break;
         }
         else
         {
+            pthread_mutex_lock(&context->id_set_mutex);
             long id = borrow_id(&context->id_set);
+            pthread_mutex_unlock(&context->id_set_mutex);
             struct task_t *task = &context->tasks[id];
             queue_pop(&srv_context->queue, task);
 
@@ -352,6 +349,7 @@ cleanup:
     }
 
 exit_label:
+    printf("Closing receiver\n");
     pthread_mutex_lock(&srv_context->set_mutex);
     set_remove_sock(&srv_context->set, client_sfd);
     close_client(client_sfd);
@@ -430,24 +428,32 @@ srv_server(void *arg)
         if (status != 0)
         {
             perror("Couldn't start sender thread");
+            pthread_cancel(node->sender_id);
+
             handler_context_destroy(node->handler_context);
             free(node->handler_context);
+            set_remove_sock(&context->set, node->socket_fd);
             close_client(client_sfd);
         }
-
-        status = pthread_create(
-            &node->receiver_id, NULL, task_receiver, node->handler_context
-        );
-        if (status != 0)
+        else
         {
-            perror("Couldn't start receiver thread");
-            handler_context_destroy(node->handler_context);
-            free(node->handler_context);
-            close_client(client_sfd);
+            status = pthread_create(
+                &node->receiver_id, NULL, task_receiver, node->handler_context
+            );
+            if (status != 0)
+            {
+                perror("Couldn't start receiver thread");
+                pthread_cancel(node->sender_id);
+                pthread_cancel(node->receiver_id);
+
+                handler_context_destroy(node->handler_context);
+                free(node->handler_context);
+                set_remove_sock(&context->set, node->socket_fd);
+                close_client(client_sfd);
+            }
         }
 
         pthread_cleanup_pop(!0);
-        pthread_mutex_unlock(&context->set_mutex);
     }
 
     return NULL;
@@ -459,7 +465,6 @@ run_async_server(struct task_t *task, struct config_t *config)
     struct srv_context_t context;
     context.hash = config->hash;
     context.tasks_running = 0;
-    pthread_mutex_init(&context.thread_started, NULL);
     pthread_mutex_init(&context.tasks_mutex, NULL);
     pthread_mutex_init(&context.set_mutex, NULL);
     pthread_cond_init(&context.tasks_cond, NULL);
@@ -478,15 +483,16 @@ run_async_server(struct task_t *task, struct config_t *config)
     server_address.sin_port = htons(config->port);
     server_address.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(server_socket, (struct sockaddr*) &server_address, sizeof(server_address)))
+    if (bind(server_socket, 
+             (struct sockaddr*) &server_address, sizeof(server_address)))
         handle_error("bind");
 
     if (listen(server_socket, MAX_CLIENTS) == -1)
         handle_error("listen");
 
     pthread_t server_thread;
-    pthread_create(&server_thread, NULL, srv_server, 
-                   (void *) &(struct params_t) { &context, server_socket });
+    struct params_t params = { &context, server_socket };
+    pthread_create(&server_thread, NULL, srv_server, (void *) &params);
 
     task->from = 2;
     task->to = config->length;
@@ -606,8 +612,8 @@ cl_task_receiver(void *arg)
             status = read_message(server_sfd, &task);
             if (status == -1) goto exit_label;
 
-            pthread_mutex_lock(&context->tasks_mutex);
             queue_push(&context->queue, &task);
+            pthread_mutex_lock(&context->tasks_mutex);
             ++context->tasks_running;
             pthread_mutex_unlock(&context->tasks_mutex);
             break;
@@ -701,16 +707,32 @@ run_async_client(struct task_t *task, struct config_t *config)
     }
 
     pthread_t receiver_thread;
-    pthread_create(&receiver_thread, NULL, cl_task_receiver, (void *) &context);
+    status = pthread_create(
+            &receiver_thread, NULL, cl_task_receiver, (void *) &context);
+    if (status != 0)
+    {
+        perror("Couldn't start receiver thread");
+        pthread_cancel(receiver_thread);
+        goto cancel_label;
+    }
 
     pthread_t sender_thread;
-    pthread_create(&sender_thread, NULL, cl_task_sender, (void *) &context);
+    status = pthread_create(
+            &sender_thread, NULL, cl_task_sender, (void *) &context);
+    if (status != 0)
+    {
+        perror("Couldn't start sender thread");
+        pthread_cancel(receiver_thread);
+        pthread_cancel(sender_thread);
+        goto cancel_label;
+    }
 
     pthread_join(receiver_thread, NULL);
 
     pthread_cancel(sender_thread);
     pthread_join(sender_thread, NULL);
 
+cancel_label:
     for (int i = 0; i < cpu_count; ++i)
     {
         pthread_cancel(threads[i]);

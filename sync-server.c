@@ -18,11 +18,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#ifdef __APPLE__
 #include "sem.h"
-#else
-#include <semaphore.h>
-#endif
 
 #define MAX_CLIENTS 50
 #define handle_error(msg) \
