@@ -14,7 +14,7 @@ typedef struct
     int value;
 } sem_t;
 
-void
+static inline void
 sem_init(sem_t *sem, int pshared, int value)
 {
     pthread_mutex_init(&sem->value_mutex, NULL);
@@ -22,7 +22,7 @@ sem_init(sem_t *sem, int pshared, int value)
     sem->value = value;
 }
 
-void
+static inline void
 sem_wait(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
@@ -37,7 +37,7 @@ sem_wait(sem_t *sem)
     pthread_mutex_unlock(&sem->value_mutex);
 }
 
-void
+static inline void
 sem_post(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
@@ -46,7 +46,7 @@ sem_post(sem_t *sem)
     pthread_mutex_unlock(&sem->value_mutex);
 }
 
-void
+static inline void
 sem_close(sem_t *sem)
 {
     pthread_mutex_destroy(&sem->value_mutex);

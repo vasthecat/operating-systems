@@ -421,11 +421,12 @@ run_client(struct task_t *task, struct config_t *config)
     st_context.hash = config->hash;
     st_context.cd.initialized = 0;
 
+    bool found = false;
+
     int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
     int status = sendall(network_socket, &cpu_count, sizeof(cpu_count), 0);
     if (status == -1) goto exit_label;
 
-    bool found = false;
     while (!found)
     {
         enum command_t tag;
