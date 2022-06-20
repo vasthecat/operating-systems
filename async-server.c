@@ -232,7 +232,7 @@ close_client(int client_sfd)
 {
     int status;
 
-    fprintf(stderr, "Sending EXIT\n");
+    /* fprintf(stderr, "Sending EXIT\n"); */
     status = send_tag(client_sfd, CMD_EXIT);
     if (status == -1) return -1;
 
@@ -336,6 +336,7 @@ task_receiver(void *arg)
 
     goto exit_label;
 cleanup:
+    /* printf("[fd=%i] Starting cleanup\n", client_sfd); */
     // Return all tasks to queue
     for (int i = 0; i < context->max_tasks; ++i)
     {
@@ -349,10 +350,9 @@ cleanup:
     }
 
 exit_label:
-    printf("Closing receiver\n");
+    close_client(client_sfd);
     pthread_mutex_lock(&srv_context->set_mutex);
     set_remove_sock(&srv_context->set, client_sfd);
-    close_client(client_sfd);
     pthread_mutex_unlock(&srv_context->set_mutex);
     handler_context_destroy(context);
 
@@ -385,10 +385,10 @@ srv_server(void *arg)
     int server_sfd = params->socket_fd;
     int status;
 
+    // Printing to stderr to be able to check output in tests
+    fprintf(stderr, "Server started successfully\n");
     while (true)
     {
-        // Printing to stderr to be able to check output in tests
-        fprintf(stderr, "Waiting for new connections...\n");
         int client_sfd = accept(server_sfd, NULL, NULL);
         if (client_sfd == -1)
             handle_error("accept");
@@ -504,20 +504,20 @@ run_async_server(struct task_t *task, struct config_t *config)
 
     memcpy(task->password, context.password, sizeof(context.password));
 
-    pthread_mutex_lock(&context.set_mutex);
-    for (int i = 0; i < context.set.size; ++i)
+    while (true)
     {
-        pthread_t receiver_thread = context.set.data[i].receiver_id;
-        pthread_cancel(receiver_thread);
-        pthread_join(receiver_thread, NULL);
+        pthread_mutex_lock(&context.set_mutex);
+        int set_size = context.set.size;
+        pthread_t sender_thread = context.set.data[0].sender_id;
+        pthread_t receiver_thread = context.set.data[0].receiver_id;
+        pthread_mutex_unlock(&context.set_mutex);
+        if (set_size == 0) break;
 
-        pthread_t sender_thread = context.set.data[i].sender_id;
+        pthread_join(receiver_thread, NULL);
         pthread_cancel(sender_thread);
         pthread_join(sender_thread, NULL);
-
-        close_client(context.set.data[i].socket_fd);
     }
-    pthread_mutex_unlock(&context.set_mutex);
+    printf("All clients disconnected\n");
 
     pthread_cancel(server_thread);
     pthread_join(server_thread, NULL);
