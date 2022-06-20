@@ -12,6 +12,7 @@
 #include <alloca.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <signal.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -23,6 +24,10 @@
 #define MAX_CLIENTS 50
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
+#define MTDEBUG(msg) \
+    do { pthread_t tid = pthread_self(); \
+         printf("[tid=%li] %s\n", tid, msg); } while (0)
 
 enum command_t
 {
@@ -99,6 +104,22 @@ set_remove_sock(struct set_t *set, int socket_fd)
         }
     }
     set->data[idx] = set->data[set->size - 1];
+    set->size--;
+}
+
+static int
+set_find_sock(struct set_t *set, int socket_fd)
+{
+    for (int i = 0; i < set->size; ++i)
+        if (set->data[i].socket_fd == socket_fd)
+            return i;
+    return -1;
+}
+
+static void
+set_remove_index(struct set_t *set, int index)
+{
+    set->data[index] = set->data[set->size - 1];
     set->size--;
 }
 
@@ -288,6 +309,11 @@ task_sender(void *arg)
 
     goto exit_label;
 cleanup:
+    // TODO: send_message should return error when client is closed
+    // and go to this label, but that doesn't happen. Maybe sender
+    // stuck on queue_pop? Right now respective receiver thread is
+    // killing sender.
+    MTDEBUG("Error while writing");
     // NOTE: All tasks should be returned in task_receiver.
     // This label and comment will be removed when this workflow is tested.
 
@@ -317,6 +343,7 @@ task_receiver(void *arg)
         struct task_t task;
         status = recvall(client_sfd, &task, sizeof(task), 0);
         if (status == -1) goto cleanup;
+
         --context->current_tasks;
         return_id(&context->id_set, task.id);
         context->tasks[task.id].done = true;
@@ -336,7 +363,7 @@ task_receiver(void *arg)
 
     goto exit_label;
 cleanup:
-    /* printf("[fd=%i] Starting cleanup\n", client_sfd); */
+    MTDEBUG("Starting cleanup");
     // Return all tasks to queue
     for (int i = 0; i < context->max_tasks; ++i)
     {
@@ -351,11 +378,21 @@ cleanup:
 
 exit_label:
     close_client(client_sfd);
-    pthread_mutex_lock(&srv_context->set_mutex);
-    set_remove_sock(&srv_context->set, client_sfd);
-    pthread_mutex_unlock(&srv_context->set_mutex);
-    handler_context_destroy(context);
 
+    pthread_mutex_lock(&srv_context->set_mutex);
+    /* set_remove_sock(&srv_context->set, client_sfd); */
+    // TODO: Sender should close itself when client disconnects but
+    // that doesn't happen
+    int set_index = set_find_sock(&srv_context->set, client_sfd);
+    if (set_index == -1)
+        handle_error("Receiver tried to find socket that is not in set");
+    pthread_t sender_thread = srv_context->set.data[set_index].sender_id;
+    pthread_cancel(sender_thread);
+    pthread_join(sender_thread, NULL);
+    set_remove_index(&srv_context->set, set_index);
+    pthread_mutex_unlock(&srv_context->set_mutex);
+
+    handler_context_destroy(context);
     if (srv_context->tasks_running == 0 || srv_context->found)
     {
         pthread_cond_signal(&srv_context->tasks_cond);
@@ -462,6 +499,11 @@ srv_server(void *arg)
 bool
 run_async_server(struct task_t *task, struct config_t *config)
 {
+    // There is handlers to all read/write operations on sockets
+    // and SIGPIPE ends program prematurely when some client
+    // disconnected while not all tasks are complete
+    signal(SIGPIPE, SIG_IGN);
+
     struct srv_context_t context;
     context.hash = config->hash;
     context.tasks_running = 0;
@@ -514,6 +556,8 @@ run_async_server(struct task_t *task, struct config_t *config)
         if (set_size == 0) break;
 
         pthread_join(receiver_thread, NULL);
+
+        // Not necessary since receiver should cancel respective sender
         pthread_cancel(sender_thread);
         pthread_join(sender_thread, NULL);
     }
