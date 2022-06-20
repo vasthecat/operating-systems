@@ -1,9 +1,9 @@
 CC=gcc
-CFLAGS=-Wall -g -std=c99
+CFLAGS=-Wall -g -std=c99 -D_XOPEN_SOURCE -D_GNU_SOURCE
 LIBS=-lcrypt -lpthread
 DEPS=
 
-OBJ=main.o common.o iterative.o recursive.o generator.o multithreaded.o singlethreaded.o queue.o server.o client.o
+OBJ=main.o common.o iterative.o recursive.o generator.o multithreaded.o singlethreaded.o queue.o sync-server.o async-server.o
 TARGET=brute
 
 ifeq ($(shell uname), Darwin)

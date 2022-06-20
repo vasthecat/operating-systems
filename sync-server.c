@@ -1,4 +1,4 @@
-#include "server.h"
+#include "sync-server.h"
 
 #include "singlethreaded.h"
 #include "iterative.h"
@@ -16,16 +16,19 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
-#ifdef __APPLE__
 #include "sem.h"
-#else
-#include <semaphore.h>
-#endif
 
 #define MAX_CLIENTS 50
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
+enum command_t
+{
+    CMD_EXIT = 1,
+    CMD_TASK,
+};
 
 struct node_t
 {
@@ -39,17 +42,18 @@ struct set_t
     struct node_t *data;
 };
 
-void
+static void
 set_init(struct set_t *set)
 {
     set->size = 0;
     set->capacity = 2;
-    set->data = calloc(set->capacity, sizeof(struct node_t));
+    set->data = calloc(set->capacity, sizeof(*set->data));
     if (set->data == NULL)
         handle_error("Couldn't allocate space for set_t");
 }
 
-void
+/*
+static void
 set_insert(struct set_t *set, struct node_t node)
 {
     set->data[set->size] = node;
@@ -62,23 +66,24 @@ set_insert(struct set_t *set, struct node_t node)
             handle_error("Couldn't reallocate space for set_t");
     }
 }
+*/
 
 // More convenient than set_insert in this case
-struct node_t *
+static struct node_t *
 set_take_last(struct set_t *set)
 {
     set->size++;
     if (set->size == set->capacity)
     {
         set->capacity *= 2;
-        set->data = realloc(set->data, set->capacity);
+        set->data = realloc(set->data, set->capacity * sizeof(*set->data));
         if (set->data == NULL)
             handle_error("Couldn't reallocate space for set_t");
     }
     return &set->data[set->size - 1];
 }
 
-void
+static void
 set_remove_sock(struct set_t *set, int socket_fd)
 {
     int idx = 0;
@@ -94,7 +99,7 @@ set_remove_sock(struct set_t *set, int socket_fd)
     set->size--;
 }
 
-void
+static void
 set_destroy(struct set_t *set)
 {
     free(set->data);
@@ -150,7 +155,7 @@ close_client(int client_sfd)
 }
 
 static int
-send_task(const int client_sfd, struct task_t *task, bool *result)
+send_task(const int client_sfd, struct task_t *task)
 {
     int status;
 
@@ -168,17 +173,17 @@ send_task(const int client_sfd, struct task_t *task, bool *result)
     status = sendall(client_sfd, task, length, 0);
     if (status == -1) return -1;
 
-    int size;
-    status = recvall(client_sfd, &size, sizeof(size), 0);
+    // Read response from client
+    enum command_t tag;
+    status = recvall(client_sfd, &tag, sizeof(tag), 0);
     if (status == -1) return -1;
 
-    if (size != 0)
-    {
-        status = recv(client_sfd, task->password, size, 0);
-        if (status == -1) return -1;
-    }
+    status = recvall(client_sfd, &length, sizeof(length), 0);
+    if (status == -1) return -1;
 
-    *result = (size != 0);
+    status = recvall(client_sfd, task, sizeof(*task), 0);
+    if (status == -1) return -1;
+
     return 0;
 }
 
@@ -197,14 +202,13 @@ serve_client(void *arg)
 
         task.to = task.from;
         task.from = 0;
-        bool found = false;
-        int status = send_task(client_sfd, &task, &found);
+        int status = send_task(client_sfd, &task);
         if (status == -1)
         {
             queue_push(&context->queue, &task);
             break;
         }
-        if (found)
+        if (task.correct)
         {
             memcpy(context->password, task.password, sizeof(task.password));
             context->found = true;
@@ -247,6 +251,7 @@ srv_server(void *arg)
     struct srv_context_t *context = (struct srv_context_t *) params->context;
     int server_sfd = params->socket_fd;
 
+    int status;
     while (true)
     {
         // Printing to stderr to be able to check output in tests
@@ -256,6 +261,14 @@ srv_server(void *arg)
             handle_error("accept");
         fprintf(stderr, "Got new connection...\n");
 
+        int max_tasks;
+        status = recvall(client_socket, &max_tasks, sizeof(max_tasks), 0);
+        if (status == -1)
+        {
+            close_client(client_socket);
+            continue;
+        }
+
         pthread_mutex_lock(&context->set_mutex);
         pthread_cleanup_push(
             (void (*) (void*)) pthread_mutex_unlock,
@@ -264,7 +277,7 @@ srv_server(void *arg)
 
         struct node_t *node = set_take_last(&context->set);
         node->socket_fd = client_socket;
-        int status = pthread_create(
+        status = pthread_create(
             &node->thread_id, NULL, serve_client,
             &(struct params_t) { context, client_socket }
         );
@@ -349,4 +362,100 @@ run_server(struct task_t *task, struct config_t *config)
     close(server_socket);
 
     return context.found;
+}
+
+static int
+send_message(int socket_fd, enum command_t tag, void *data, int length)
+{
+    struct iovec vec[3];
+    vec[0].iov_base = &tag;
+    vec[0].iov_len = sizeof(tag);
+
+    vec[1].iov_base = &length;
+    vec[1].iov_len = sizeof(length);
+
+    vec[2].iov_base = data;
+    vec[2].iov_len = length;
+
+    int status = sendall_vec(socket_fd, vec, sizeof(vec) / sizeof(vec[0]));
+    if (status == -1) return -1;
+
+    return 0;
+}
+
+static int
+cl_process_task(int network_socket, struct task_t *task,
+                struct st_context_t *context, struct config_t *config)
+{
+    bool found = process_task(task, config, context, st_password_handler);
+    task->correct = found;
+
+    int status = send_message(network_socket, CMD_TASK, task, sizeof(*task));
+    if (status == -1) return -1;
+
+    return 0;
+}
+
+bool
+run_client(struct task_t *task, struct config_t *config)
+{
+    int network_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    struct sockaddr_in server_address;
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(config->port);
+
+    struct in_addr address;
+    inet_pton(AF_INET, config->address, &address);
+    server_address.sin_addr.s_addr = address.s_addr;
+
+    if (connect(network_socket,
+                (struct sockaddr *) &server_address,
+                sizeof(server_address)))
+    {
+        handle_error("connection");
+    }
+    printf("Connected to server\n");
+
+    struct st_context_t st_context;
+    st_context.hash = config->hash;
+    st_context.cd.initialized = 0;
+
+    bool found = false;
+
+    int cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    int status = sendall(network_socket, &cpu_count, sizeof(cpu_count), 0);
+    if (status == -1) goto exit_label;
+
+    while (!found)
+    {
+        enum command_t tag;
+        status = recvall(network_socket, &tag, sizeof(tag), 0);
+        if (status == -1) break;
+
+        int length;
+        switch (tag)
+        {
+        case CMD_EXIT:
+            goto exit_label;
+            break;
+        case CMD_TASK:
+            status = recvall(network_socket, &length, sizeof(length), 0);
+            if (status == -1) goto exit_label;
+
+            status = recvall(network_socket, task, length, 0);
+            if (status == -1) goto exit_label;
+
+            status = cl_process_task(network_socket, task, &st_context, config);
+            if (status == -1) goto exit_label;
+
+            break;
+        }
+    }
+
+exit_label:
+
+    close(network_socket);
+
+    return found;
 }

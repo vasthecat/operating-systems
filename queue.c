@@ -33,6 +33,7 @@ queue_push(struct queue_t *queue, struct task_t *task)
     if (queue->tail >= queue->capacity)
         queue->tail = 0;
 
+    ++queue->size;
     queue->tasks[queue->tail] = *task;
     pthread_mutex_unlock(&queue->tail_mut);
   
@@ -49,6 +50,7 @@ queue_pop(struct queue_t *queue, struct task_t *task)
     if (queue->head >= queue->capacity)
         queue->head = 0;
 
+    --queue->size;
     *task = queue->tasks[queue->head];
     pthread_mutex_unlock(&queue->head_mut);
 

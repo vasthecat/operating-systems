@@ -1,6 +1,10 @@
 #ifndef SEM_H
 #define SEM_H
 
+#ifndef __APPLE__
+#include <semaphore.h>
+#else
+
 #include <pthread.h>
 
 typedef struct
@@ -10,7 +14,7 @@ typedef struct
     int value;
 } sem_t;
 
-void
+static inline void
 sem_init(sem_t *sem, int pshared, int value)
 {
     pthread_mutex_init(&sem->value_mutex, NULL);
@@ -18,7 +22,7 @@ sem_init(sem_t *sem, int pshared, int value)
     sem->value = value;
 }
 
-void
+static inline void
 sem_wait(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
@@ -33,7 +37,7 @@ sem_wait(sem_t *sem)
     pthread_mutex_unlock(&sem->value_mutex);
 }
 
-void
+static inline void
 sem_post(sem_t *sem)
 {
     pthread_mutex_lock(&sem->value_mutex);
@@ -42,11 +46,13 @@ sem_post(sem_t *sem)
     pthread_mutex_unlock(&sem->value_mutex);
 }
 
-void
+static inline void
 sem_close(sem_t *sem)
 {
     pthread_mutex_destroy(&sem->value_mutex);
     pthread_cond_destroy(&sem->sem_cond);
 }
+
+#endif // __APPLE__
 
 #endif // SEM_H
